@@ -18,6 +18,13 @@ export const MAX_SOURCE_PIXELS = 120_000_000;
 /** Used when a card's quality is not a usable number. */
 export const DEFAULT_QUALITY = 0.9;
 
+/** A quality kept inside 0..1; anything that is not a number becomes the default. */
+export function clampQuality(quality: number | undefined): number {
+  return quality !== undefined && Number.isFinite(quality)
+    ? Math.min(1, Math.max(0, quality))
+    : DEFAULT_QUALITY;
+}
+
 /** Placement types that are made of still images: a post, a carousel slide, a document page. */
 const IMAGE_MEDIA: readonly MediaType[] = ['image', 'image-set', 'pdf'];
 
@@ -119,18 +126,13 @@ export function planRender({ asset, spec, edit = {}, sizeIndex = 0 }: PlanInput)
     ? fitCropToRatio(edit.crop, sourceSize, ratio)
     : focalCrop(sourceSize, ratio, asset.focal);
   const crop = cropToPixels(cropRect, sourceSize);
-  const quality =
-    edit.quality !== undefined && Number.isFinite(edit.quality)
-      ? Math.min(1, Math.max(0, edit.quality))
-      : DEFAULT_QUALITY;
-
   return {
     sourceSize,
     crop,
     cropRect,
     target,
     format: edit.format ?? 'jpg',
-    quality,
+    quality: clampQuality(edit.quality),
     upscaled: target.width > crop.width || target.height > crop.height,
   };
 }
