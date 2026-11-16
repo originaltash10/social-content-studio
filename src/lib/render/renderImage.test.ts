@@ -468,7 +468,16 @@ describe('failures', () => {
       readsResizeOptions: false,
       decode: () => fakeBitmap(asset.height, asset.width),
     });
-    await expectFailure(createImageRenderer(deps)(makeJob()), 'size-changed', 'site.jpg');
+    const run = createImageRenderer(deps)(makeJob());
+    await expectFailure(run, 'size-changed', 'site.jpg');
+    // Importing the same file again would be skipped as a duplicate, so the advice must not
+    // be to do that.
+    expect((await failureOf(run)).message).toBe(
+      `"site.jpg" opens as ${asset.height} x ${asset.width} pixels in this browser, but it was ` +
+        `${asset.width} x ${asset.height} when it was imported, so its crop no longer fits. ` +
+        'Try the browser you imported it with, or open it in a photo app, save a new copy as ' +
+        'JPG, and import that copy.',
+    );
   });
 
   it('size-changed also covers a HEIC decoded at another size', async () => {

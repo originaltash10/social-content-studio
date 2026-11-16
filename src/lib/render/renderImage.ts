@@ -93,9 +93,10 @@ export const JPG_BACKGROUND = '#ffffff';
 function sizeChangedMessage(job: RenderJob, bitmap: ImageBitmap): string {
   const { width, height } = job.plan.sourceSize;
   return (
-    `"${job.fileName}" is ${bitmap.width} x ${bitmap.height} pixels now, but it was ` +
-    `${width} x ${height} when it was imported, so its crop no longer fits. ` +
-    'Import the original file again.'
+    `"${job.fileName}" opens as ${bitmap.width} x ${bitmap.height} pixels in this browser, but ` +
+    `it was ${width} x ${height} when it was imported, so its crop no longer fits. ` +
+    'Try the browser you imported it with, or open it in a photo app, save a new copy as JPG, ' +
+    'and import that copy.'
   );
 }
 
