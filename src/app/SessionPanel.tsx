@@ -1,7 +1,6 @@
 /**
  * Plain controls for creating, saving, loading and clearing a session, so the session store can
- * be tested by hand. Deliberately unstyled beyond basic readability; the real UI and its visual
- * theme come later.
+ * be tested by hand. Lightly styled with the theme tokens from index.css; the real UI comes later.
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -59,8 +58,16 @@ function isTyping(target: EventTarget | null): boolean {
   );
 }
 
-const buttonClass =
-  'rounded border border-slate-400 px-3 py-1 disabled:cursor-not-allowed disabled:opacity-50';
+/** Keyboard focus ring shared by every control: 2px accent outline, clear on both backgrounds. */
+const focusClass =
+  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
+
+/** Shared button shape. Disabled buttons fade to half opacity and lose their hover change. */
+const buttonBase = `rounded-button border px-3 py-1 font-medium disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`;
+
+const primaryButtonClass = `${buttonBase} border-primary bg-primary text-white enabled:hover:bg-accent enabled:hover:border-accent`;
+
+const buttonClass = `${buttonBase} border-muted bg-surface text-ink enabled:hover:bg-page`;
 
 export function SessionPanel() {
   const session = useSessionStore((state) => state.session);
@@ -129,20 +136,20 @@ export function SessionPanel() {
       ? 'text-red-700'
       : status?.kind === 'warning'
         ? 'text-amber-700'
-        : 'text-slate-700';
+        : 'text-ink-secondary';
 
   return (
-    <section aria-label="Session" className="flex flex-col gap-4">
+    <section aria-label="Session" className="flex flex-col gap-4 rounded-card bg-surface p-6">
       <div className="flex flex-wrap items-center gap-2">
         <label className="flex items-center gap-2">
           Name
           <input
-            className="rounded border border-slate-400 px-2 py-1"
+            className={`rounded-control border border-muted bg-surface px-2 py-1 text-ink ${focusClass}`}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
         </label>
-        <button type="button" className={buttonClass} onClick={onNew}>
+        <button type="button" className={primaryButtonClass} onClick={onNew}>
           New session
         </button>
       </div>
@@ -197,7 +204,7 @@ export function SessionPanel() {
       </div>
 
       {!canUseFolders && (
-        <p>
+        <p className="text-ink-secondary">
           This browser cannot open or save folders. Use Download .scs and Load .scs, or switch to
           Chrome or Edge.
         </p>
@@ -218,22 +225,22 @@ export function SessionPanel() {
       </div>
 
       {session ? (
-        <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-1">
-          <dt>Session</dt>
+        <dl className="grid grid-cols-[max-content_1fr] items-baseline gap-x-4 gap-y-1">
+          <dt className="text-label text-muted-text">Session</dt>
           <dd>{session.name}</dd>
-          <dt>Folder</dt>
+          <dt className="text-label text-muted-text">Folder</dt>
           <dd>{folderName ?? 'None yet'}</dd>
-          <dt>Changes</dt>
+          <dt className="text-label text-muted-text">Changes</dt>
           <dd>{dirty ? 'Unsaved changes' : 'All changes saved'}</dd>
-          <dt>Last saved</dt>
+          <dt className="text-label text-muted-text">Last saved</dt>
           <dd>{lastSavedAt ? new Date(lastSavedAt).toLocaleTimeString() : 'Not yet'}</dd>
-          <dt>Contents</dt>
+          <dt className="text-label text-muted-text">Contents</dt>
           <dd>
             {session.assets.length} assets, {session.cards.length} cards
           </dd>
         </dl>
       ) : (
-        <p>No session is open.</p>
+        <p className="text-ink-secondary">No session is open.</p>
       )}
 
       <p role="status" className={statusColor}>
