@@ -228,8 +228,13 @@ export function detectFileType(head: Uint8Array, fileName: string, size: number)
   };
 }
 
+/** Reads the first bytes of `blob` and decides what to do with it. */
+export async function sniffBlob(blob: Blob, fileName: string): Promise<FileType> {
+  const head = new Uint8Array(await blob.slice(0, HEAD_BYTES).arrayBuffer());
+  return detectFileType(head, fileName, blob.size);
+}
+
 /** Reads the first bytes of `file` and decides what to do with it. */
-export async function sniffFile(file: File): Promise<FileType> {
-  const head = new Uint8Array(await file.slice(0, HEAD_BYTES).arrayBuffer());
-  return detectFileType(head, file.name, file.size);
+export function sniffFile(file: File): Promise<FileType> {
+  return sniffBlob(file, file.name);
 }
