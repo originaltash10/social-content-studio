@@ -22,6 +22,8 @@ export default defineConfig({
         'src/lib/validate.ts': { statements: 100, branches: 100, functions: 100, lines: 100 },
         // Session persistence and the store are held to the same bar.
         'src/lib/session/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        // The import pipeline: file-type detection, hashing, decoding, thumbnails.
+        'src/lib/image/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/store/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },

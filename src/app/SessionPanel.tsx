@@ -19,6 +19,7 @@ import {
 } from '../store/persistence';
 import { useSessionStore } from '../store/sessionStore';
 import type { NewCard } from '../store/sessionStore';
+import { buttonClass, focusClass, primaryButtonClass } from './styles';
 
 const DISCARD_PROMPT = 'The open session has unsaved changes. Discard them and continue?';
 const CLEAR_PROMPT =
@@ -57,17 +58,6 @@ function isTyping(target: EventTarget | null): boolean {
     (target instanceof HTMLElement && target.isContentEditable)
   );
 }
-
-/** Keyboard focus ring shared by every control: 2px accent outline, clear on both backgrounds. */
-const focusClass =
-  'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
-
-/** Shared button shape. Disabled buttons fade to half opacity and lose their hover change. */
-const buttonBase = `rounded-button border px-3 py-1 font-medium disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`;
-
-const primaryButtonClass = `${buttonBase} border-primary bg-primary text-white enabled:hover:bg-accent enabled:hover:border-accent`;
-
-const buttonClass = `${buttonBase} border-muted bg-surface text-ink enabled:hover:bg-page`;
 
 export function SessionPanel() {
   const session = useSessionStore((state) => state.session);

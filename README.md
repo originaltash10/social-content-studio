@@ -14,11 +14,16 @@ The app is not yet usable for making posts. What works today:
   automatically once a session has a folder. The Undo button, or Ctrl/Cmd-Z, reverses the last
   change to a card, up to 50 steps back. For now the only card action on screen is adding a
   sample card.
+- **Importing photos.** With a session open, drop JPG, PNG or HEIC photos onto the import panel,
+  or use Choose files. Each photo is shown as a small preview with its name and size, and is
+  saved with the session, unchanged. A photo that is already in the session is not added twice.
+  Files are recognised by their contents, not their names. Video (MP4, MOV) is not imported yet,
+  and other file types need converting to JPG or PNG first; the panel says so for each file.
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), and the checker that compares a post against them is
   written and tested. It is not yet connected to anything on screen.
 
-The screen is a plain test panel for sessions. Importing photos and video, cropping and
+The screen is a plain test panel for sessions and importing. Importing video, cropping and
 resizing, captions, the board of posts and export are planned but not built yet.
 [SPEC.md](SPEC.md) describes the full plan.
 
@@ -64,3 +69,28 @@ Both are licensed under the [SIL Open Font License, Version 1.1](https://openfon
 which allows them to be bundled and redistributed with this app. The licence text is included
 in each package's `LICENSE` file, and the built CSS keeps a notice naming both fonts and the
 licence. The "All rights reserved" notice above does not apply to the fonts.
+
+### HEIC decoder
+
+Chrome and Edge cannot open HEIC photos (the iPhone format) on their own, so the app includes
+a decoder:
+
+- **heic-to** 1.6.7, by Hopper Gee, licensed under the GNU Lesser General Public License,
+  version 3 (LGPL-3.0). Source for this exact version:
+  <https://www.npmjs.com/package/heic-to/v/1.6.7?activeTab=code> (project:
+  <https://github.com/hoppergee/heic-to>).
+- heic-to contains a build of **libheif** 1.23.7 and its HEVC decoder **libde265**, both by
+  struktur AG and also licensed under LGPL-3.0. Source: <https://github.com/strukturag/libheif>
+  and <https://github.com/strukturag/libde265>.
+
+The licence texts are in this repository and are published with the app:
+
+- [`public/licenses/heic-to-LICENSE.txt`](public/licenses/heic-to-LICENSE.txt): heic-to's
+  licence file, which includes the LGPL-3.0 text.
+- [`public/licenses/GPL-3.0.txt`](public/licenses/GPL-3.0.txt): the GNU General Public License,
+  version 3, which the LGPL-3.0 refers to.
+
+The decoder is used unmodified. It is built into its own file, separate from the app's code,
+and is downloaded only when a HEIC photo needs to be opened, so it can be replaced with another
+build of the same library. The "All rights reserved" notice above does not apply to the
+decoder.
