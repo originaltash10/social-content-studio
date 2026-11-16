@@ -1,0 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Environment files (never commit keys)
+.env
+.env.*
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.log
+
+# Local Claude Code settings (only the per-user file; shared .claude/ files stay tracked)
+.claude/settings.local.json
+
+# Session bundles downloaded from the app
+*.scs
+
+# Playwright output
+test-results/
+playwright-report/

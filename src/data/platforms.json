@@ -1,0 +1,748 @@
+{
+  "version": 1,
+  "sources": {
+    "hootsuite-2026-11-02": {
+      "title": "Hootsuite, Social media image sizes guide (updated 2026-11-02)",
+      "url": "https://blog.hootsuite.com/social-media-image-sizes-guide/",
+      "note": "Image sizes and ratios, as transcribed in SPEC.md."
+    },
+    "platform-help-2026-mid": {
+      "title": "Platform help pages, mid-2026",
+      "url": null,
+      "note": "Video, caption, and other limits as transcribed in SPEC.md. SPEC dates these only as mid-2026; 2026-07-01 is a placeholder date. Not re-checked against live pages; re-check before relying on them."
+    }
+  },
+  "placements": [
+    {
+      "platform": "instagram",
+      "placement": "feed-vertical",
+      "label": "Feed vertical",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1350
+        }
+      ],
+      "ratios": ["4:5"],
+      "captionCap": 2200,
+      "truncation": [],
+      "hashtagCap": 30,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [],
+      "notes": ["Profile grid shows a 3:4 crop."]
+    },
+    {
+      "platform": "instagram",
+      "placement": "feed-square",
+      "label": "Feed square",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1080
+        }
+      ],
+      "ratios": ["1:1"],
+      "captionCap": 2200,
+      "truncation": [],
+      "hashtagCap": 30,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the 30-hashtag cap on the Instagram Feed vertical row; applied to every Instagram placement that has a caption."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "instagram",
+      "placement": "feed-landscape",
+      "label": "Feed landscape",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 566
+        }
+      ],
+      "ratios": ["1.91:1"],
+      "captionCap": 2200,
+      "truncation": [],
+      "hashtagCap": 30,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the 30-hashtag cap on the Instagram Feed vertical row; applied to every Instagram placement that has a caption."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "instagram",
+      "placement": "carousel",
+      "label": "Carousel",
+      "mediaTypes": ["image-set"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1350
+        }
+      ],
+      "ratios": ["4:5"],
+      "captionCap": 2200,
+      "truncation": [],
+      "hashtagCap": 30,
+      "slides": {
+        "min": 2,
+        "max": 20,
+        "sameRatio": true
+      },
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the 30-hashtag cap on the Instagram Feed vertical row; applied to every Instagram placement that has a caption."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "instagram",
+      "placement": "story",
+      "label": "Story",
+      "mediaTypes": ["image", "video"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1920
+        }
+      ],
+      "ratios": ["9:16"],
+      "captionCap": null,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": {
+        "min": null,
+        "max": 60
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": {
+        "kind": "centered-area",
+        "width": 1080,
+        "height": 1610
+      },
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\")."
+      ],
+      "notes": ["Video duration limit is per Story."]
+    },
+    {
+      "platform": "instagram",
+      "placement": "reel",
+      "label": "Reel",
+      "mediaTypes": ["video"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1920
+        }
+      ],
+      "ratios": ["9:16"],
+      "captionCap": 2200,
+      "truncation": [],
+      "hashtagCap": 30,
+      "slides": null,
+      "durationSec": {
+        "min": null,
+        "max": 180
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": false,
+      "hashtagsInCaption": false,
+      "safeZone": {
+        "kind": "insets",
+        "top": 0.14,
+        "bottom": 0.35,
+        "left": 0.06,
+        "right": 0.06
+      },
+      "verified": {
+        "sizes": "2026-07-01",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "platform-help-2026-mid",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the 30-hashtag cap on the Instagram Feed vertical row; applied to every Instagram placement that has a caption.",
+        "Video sizes are not covered by the Hootsuite image guide; dated to the platform help pages."
+      ],
+      "notes": ["MP4, H.264 video, AAC audio.", "Cover crops to 3:4 on the profile grid."]
+    },
+    {
+      "platform": "linkedin",
+      "placement": "image-square",
+      "label": "Image post square",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1200,
+          "height": 1200
+        }
+      ],
+      "ratios": ["1:1"],
+      "captionCap": 3000,
+      "truncation": [
+        {
+          "context": "mobile",
+          "chars": 140
+        },
+        {
+          "context": "desktop",
+          "chars": 210
+        }
+      ],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [],
+      "notes": ["\"...see more\" cut-off values are approximate (\"around\" in SPEC)."]
+    },
+    {
+      "platform": "linkedin",
+      "placement": "image-vertical",
+      "label": "Image post vertical",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 720,
+          "height": 900
+        }
+      ],
+      "ratios": ["4:5"],
+      "captionCap": 3000,
+      "truncation": [
+        {
+          "context": "mobile",
+          "chars": 140
+        },
+        {
+          "context": "desktop",
+          "chars": 210
+        }
+      ],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the LinkedIn \"...see more\" cut-off on the Image post square row; applied to every LinkedIn placement."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "linkedin",
+      "placement": "link-preview",
+      "label": "Link preview",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1200,
+          "height": 627
+        }
+      ],
+      "ratios": ["1.91:1"],
+      "captionCap": 3000,
+      "truncation": [
+        {
+          "context": "mobile",
+          "chars": 140
+        },
+        {
+          "context": "desktop",
+          "chars": 210
+        }
+      ],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the LinkedIn \"...see more\" cut-off on the Image post square row; applied to every LinkedIn placement."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "linkedin",
+      "placement": "document-carousel",
+      "label": "Document carousel",
+      "mediaTypes": ["pdf"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1350
+        }
+      ],
+      "ratios": ["4:5"],
+      "captionCap": 3000,
+      "truncation": [
+        {
+          "context": "mobile",
+          "chars": 140
+        },
+        {
+          "context": "desktop",
+          "chars": 210
+        }
+      ],
+      "hashtagCap": null,
+      "slides": {
+        "min": null,
+        "max": 300,
+        "sameRatio": true
+      },
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": 100000000,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the LinkedIn \"...see more\" cut-off on the Image post square row; applied to every LinkedIn placement.",
+        "MB and GB are read as decimal (1 MB = 1,000,000 bytes), the stricter reading.",
+        "SPEC gives no minimum page count; min is null.",
+        "All pages are required to share one ratio, as for the Instagram carousel; SPEC does not state this for LinkedIn."
+      ],
+      "notes": ["Export slides as one PDF."]
+    },
+    {
+      "platform": "linkedin",
+      "placement": "video",
+      "label": "Video",
+      "mediaTypes": ["video"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1920
+        },
+        {
+          "width": 1080,
+          "height": 1080
+        },
+        {
+          "width": 1920,
+          "height": 1080
+        }
+      ],
+      "ratios": ["9:16", "1:1", "16:9"],
+      "captionCap": 3000,
+      "truncation": [
+        {
+          "context": "mobile",
+          "chars": 140
+        },
+        {
+          "context": "desktop",
+          "chars": 210
+        }
+      ],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": {
+        "min": 3,
+        "max": 600
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": 5000000000,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-07-01",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "platform-help-2026-mid",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists the LinkedIn \"...see more\" cut-off on the Image post square row; applied to every LinkedIn placement.",
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\").",
+        "MB and GB are read as decimal (1 MB = 1,000,000 bytes), the stricter reading.",
+        "Video sizes are not covered by the Hootsuite image guide; dated to the platform help pages.",
+        "SPEC originally listed a 16:9 ratio with no pixel size; 1920 x 1080 was added for 16:9 at the product owner's direction (2026-11-16)."
+      ],
+      "notes": ["MP4 recommended."]
+    },
+    {
+      "platform": "facebook",
+      "placement": "feed-vertical",
+      "label": "Feed vertical",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1350
+        }
+      ],
+      "ratios": ["4:5"],
+      "captionCap": 63206,
+      "truncation": [
+        {
+          "context": "feed",
+          "chars": 477
+        }
+      ],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [],
+      "notes": []
+    },
+    {
+      "platform": "facebook",
+      "placement": "story",
+      "label": "Story",
+      "mediaTypes": ["image", "video"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1920
+        }
+      ],
+      "ratios": ["9:16"],
+      "captionCap": null,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": {
+        "min": null,
+        "max": 60
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": {
+        "kind": "insets",
+        "top": 0.14,
+        "bottom": 0.35,
+        "left": 0.06,
+        "right": 0.06
+      },
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\").",
+        "SPEC gives no Facebook safe zone; uses the Instagram Reel insets (top 14%, bottom 35%, sides 6%).",
+        "SPEC gives no Facebook Story video limit; uses the Instagram Story limit (60 s per Story)."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "facebook",
+      "placement": "reel",
+      "label": "Reel",
+      "mediaTypes": ["video"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1920
+        }
+      ],
+      "ratios": ["9:16"],
+      "captionCap": null,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": {
+        "min": null,
+        "max": 90
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": null,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": {
+        "kind": "insets",
+        "top": 0.14,
+        "bottom": 0.35,
+        "left": 0.06,
+        "right": 0.06
+      },
+      "verified": {
+        "sizes": "2026-07-01",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "platform-help-2026-mid",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\").",
+        "SPEC gives no Facebook safe zone; uses the Instagram Reel insets (top 14%, bottom 35%, sides 6%).",
+        "Video sizes are not covered by the Hootsuite image guide; dated to the platform help pages."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "x",
+      "placement": "landscape",
+      "label": "Landscape",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1280,
+          "height": 720
+        }
+      ],
+      "ratios": ["16:9"],
+      "captionCap": 280,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": 5000000,
+      "maxImages": 4,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "MB and GB are read as decimal (1 MB = 1,000,000 bytes), the stricter reading."
+      ],
+      "notes": ["5 MB is the mobile upload limit."]
+    },
+    {
+      "platform": "x",
+      "placement": "square",
+      "label": "Square",
+      "mediaTypes": ["image"],
+      "sizes": [
+        {
+          "width": 1080,
+          "height": 1080
+        }
+      ],
+      "ratios": ["1:1"],
+      "captionCap": 280,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": null,
+      "recommendedFps": null,
+      "maxFileBytes": 5000000,
+      "maxImages": 4,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-11-02",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "hootsuite-2026-11-02",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists \"Up to 4 images; 5 MB on mobile\" on the X Landscape row; applied to both X image placements.",
+        "MB and GB are read as decimal (1 MB = 1,000,000 bytes), the stricter reading."
+      ],
+      "notes": []
+    },
+    {
+      "platform": "x",
+      "placement": "video",
+      "label": "Video",
+      "mediaTypes": ["video"],
+      "sizes": [
+        {
+          "width": 1280,
+          "height": 720
+        },
+        {
+          "width": 720,
+          "height": 1280
+        }
+      ],
+      "ratios": ["16:9", "9:16"],
+      "captionCap": 280,
+      "truncation": [],
+      "hashtagCap": null,
+      "slides": null,
+      "durationSec": {
+        "min": null,
+        "max": 140
+      },
+      "recommendedFps": 30,
+      "maxFileBytes": 512000000,
+      "maxImages": null,
+      "captionLinksClickable": true,
+      "hashtagsInCaption": true,
+      "safeZone": null,
+      "verified": {
+        "sizes": "2026-07-01",
+        "limits": "2026-07-01"
+      },
+      "sources": {
+        "sizes": "platform-help-2026-mid",
+        "limits": "platform-help-2026-mid"
+      },
+      "assumptions": [
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\").",
+        "MB and GB are read as decimal (1 MB = 1,000,000 bytes), the stricter reading.",
+        "Video sizes are not covered by the Hootsuite image guide; dated to the platform help pages."
+      ],
+      "notes": ["Duration is the standard-account limit (2 min 20 s)."]
+    }
+  ]
+}
