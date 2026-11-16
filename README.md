@@ -50,3 +50,17 @@ npm run build   # build the app into dist/
 ## License
 
 All rights reserved. No license is granted to use, copy or modify this code.
+
+### Fonts
+
+The app bundles two typefaces from npm, served from the app itself and never from a font
+service:
+
+- **Inter** (`@fontsource-variable/inter`), Copyright 2016 The Inter Project Authors.
+- **Inter Tight** (`@fontsource-variable/inter-tight`), Copyright 2022 The Inter Project
+  Authors.
+
+Both are licensed under the [SIL Open Font License, Version 1.1](https://openfontlicense.org/),
+which allows them to be bundled and redistributed with this app. The licence text is included
+in each package's `LICENSE` file, and the built CSS keeps a notice naming both fonts and the
+licence. The "All rights reserved" notice above does not apply to the fonts.
