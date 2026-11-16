@@ -23,6 +23,11 @@ Keep each task to one feature row from the SPEC feature table.
 - Coverage for `src/lib/session` and `src/store` must stay at 100% (`npm run coverage`).
 - The validator (`src/lib/validate.ts`) must keep pass and fail tests for all nine rules in SPEC.md.
 - Supported browsers: Chrome and Edge only (WebCodecs, File System Access API).
+- Git identity: this repo is public. Before the first commit in any session, set repo-level git
+  config user.name "originaltash10" and user.email
+  "345849549+originaltash10@users.noreply.github.com" (never global config), and confirm with
+  git log -1 that author and committer use that address. Commit messages and PR descriptions have
+  no Co-Authored-By or 'Generated with' trailer lines and name no company.
 
 ## Stack
 
