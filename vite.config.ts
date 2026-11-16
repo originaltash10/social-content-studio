@@ -24,6 +24,8 @@ export default defineConfig({
         'src/lib/session/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         // The import pipeline: file-type detection, hashing, decoding, thumbnails.
         'src/lib/image/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        // Rendering: crop geometry, render plans and the bridge to the validator.
+        'src/lib/render/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/store/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
