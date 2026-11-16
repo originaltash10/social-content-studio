@@ -65,6 +65,16 @@ describe('renderThumbnail', () => {
     expect(thumbnail?.type).toBe('image/webp');
   });
 
+  it('returns whatever type the browser produced, such as PNG where WebP cannot be encoded', async () => {
+    const png = new Blob(['png thumb'], { type: 'image/png' });
+    stubCanvas({ convert: () => Promise.resolve(png) });
+
+    const thumbnail = await renderThumbnail(bitmap(800, 600));
+
+    expect(thumbnail).toBe(png);
+    expect(thumbnail?.type).toBe('image/png');
+  });
+
   it('returns null when the browser gives no drawing context', async () => {
     const canvas = stubCanvas({ context: false });
     await expect(renderThumbnail(bitmap(800, 600))).resolves.toBeNull();

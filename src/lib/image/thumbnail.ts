@@ -7,6 +7,10 @@
 /** The longest side of a thumbnail, in pixels. */
 export const THUMBNAIL_SIZE = 256;
 
+/**
+ * The type asked for. It is only a request: a browser that cannot encode WebP returns a PNG
+ * instead. Callers must go by the returned blob's own `type` and never assume WebP.
+ */
 const THUMBNAIL_TYPE = 'image/webp';
 const THUMBNAIL_QUALITY = 0.8;
 
