@@ -26,7 +26,7 @@ import type { HeicDecoder } from '../image/heic';
 import type { PixelRect } from './crop';
 import { clampQuality } from './plan';
 import type { OutputFormat, RenderPlan } from './plan';
-import { RenderError } from './protocol';
+import { RenderError, unexpectedError } from './protocol';
 import type { RenderJob, RenderResult, RenderStage } from './protocol';
 
 /** The parts of an OffscreenCanvas this code uses. */
@@ -111,13 +111,6 @@ function encodeMessage(fileName: string, format: OutputFormat): string {
   return (
     `"${fileName}" was resized but could not be saved as ${FORMAT_LABEL[format]}. ` +
     'Try again, or choose the other file format.'
-  );
-}
-
-function unexpectedMessage(fileName: string): string {
-  return (
-    `"${fileName}" could not be processed because something unexpected went wrong. ` +
-    'Try again; if it keeps happening, convert the file to JPG or PNG and import that copy.'
   );
 }
 
@@ -258,7 +251,7 @@ export function createImageRenderer(deps: RenderDeps = browserDeps()): ImageRend
       return await render(job, onStage);
     } catch (error) {
       if (error instanceof RenderError) throw error;
-      throw new RenderError('unexpected', unexpectedMessage(job.fileName));
+      throw unexpectedError(job.fileName);
     }
   };
 }

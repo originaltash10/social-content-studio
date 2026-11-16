@@ -8,6 +8,8 @@ export default defineConfig({
   // Unset (local dev, tests, preview) it is '/', Vite's default.
   base: process.env.BASE_PATH ?? '/',
   plugins: [react(), tailwindcss()],
+  // Module workers, so the image worker can load the HEIC decoder as a separate file on demand.
+  worker: { format: 'es' },
   test: {
     globals: true,
     environment: 'jsdom',
@@ -15,7 +17,9 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['src/lib/**/*.ts', 'src/store/**/*.ts'],
-      exclude: ['src/**/*.test.ts'],
+      // src/workers/image.worker.ts is the only source file left out of coverage: it is a few
+      // lines of wiring that can only run inside a real worker. Its logic is in src/lib/render.
+      exclude: ['src/**/*.test.ts', 'src/workers/image.worker.ts'],
       reporter: [['text', { skipFull: false }]],
       thresholds: {
         // SPEC.md: "Validator must have 100% rule coverage."

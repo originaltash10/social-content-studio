@@ -18,8 +18,11 @@ export type RenderJob = {
   plan: RenderPlan;
 };
 
-/** Where a job has got to. */
+/** The steps of a render that is under way. */
 export type RenderStage = 'decoding' | 'drawing' | 'encoding';
+
+/** Where a job has got to, from joining the queue to finishing one way or the other. */
+export type RenderProgress = 'queued' | RenderStage | 'done' | 'failed';
 
 export type RenderResult = {
   id: string;
@@ -49,6 +52,10 @@ export type RenderFailure =
   | 'canvas'
   /** The browser could not encode the output file. */
   | 'encode'
+  /** The job was cancelled before it produced a file. */
+  | 'cancelled'
+  /** The image worker stopped, could not be started, or was shut down. */
+  | 'worker-failed'
   | 'unexpected';
 
 /** Thrown when a render fails. The message is written for the user. */
@@ -61,3 +68,39 @@ export class RenderError extends Error {
     this.reason = reason;
   }
 }
+
+export function cancelledError(fileName: string): RenderError {
+  return new RenderError('cancelled', `"${fileName}" was cancelled before it was finished.`);
+}
+
+export function workerFailedError(fileName: string): RenderError {
+  return new RenderError(
+    'worker-failed',
+    `"${fileName}" could not be processed because the part of the app that resizes images ` +
+      'stopped working. Try again; if it keeps happening, reload the page.',
+  );
+}
+
+export function unexpectedError(fileName: string): RenderError {
+  return new RenderError(
+    'unexpected',
+    `"${fileName}" could not be processed because something unexpected went wrong. ` +
+      'Try again; if it keeps happening, convert the file to JPG or PNG and import that copy.',
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Messages between the page and the image worker
+// ---------------------------------------------------------------------------
+
+/**
+ * Page to worker. A job's photo travels as a Blob. Posting a Blob hands the worker a reference
+ * to the same stored bytes; the photo's data is not copied.
+ */
+export type ToWorker = { type: 'render'; job: RenderJob } | { type: 'cancel'; id: string };
+
+/** Worker to page. The finished file also travels as a Blob, again without a copy. */
+export type FromWorker =
+  | { type: 'progress'; id: string; stage: 'queued' | RenderStage }
+  | { type: 'done'; id: string; result: RenderResult }
+  | { type: 'failed'; id: string; error: { reason: RenderFailure; message: string } };
