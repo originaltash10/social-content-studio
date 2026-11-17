@@ -76,6 +76,11 @@ export type RenderController = {
   cancelAll(): number;
   /** Cancels everything, releases every file, and stops listening. */
   dispose(): void;
+  /**
+   * Resolves once every render that has started has finished, one way or the other. A render
+   * sent to the worker finishes when the worker answers or the job is cancelled.
+   */
+  idle(): Promise<void>;
   /** The state of each card's file, by card id. A new map is made on every change. */
   snapshot(): ReadonlyMap<string, CardRender>;
   subscribe(listener: () => void): () => void;
@@ -121,6 +126,19 @@ export function createRenderController(deps: ControllerDeps): RenderController {
   let view: ReadonlyMap<string, CardRender> = new Map();
   let nextJob = 0;
   let disposed = false;
+  /** Renders that have started and not finished. */
+  const runs = new Set<Promise<void>>();
+  /**
+   * Results found during `sync`, recorded once it has finished. Recording a result changes the
+   * store, and a store listener may call `sync` again; holding the results until the end means
+   * that can never happen part-way through a sync.
+   */
+  let held: [string, ValidationResult][] | null = null;
+
+  function record(cardId: string, result: ValidationResult): void {
+    if (held) held.push([cardId, result]);
+    else deps.writeResult(cardId, result);
+  }
 
   function changed(): void {
     view = new Map([...tracked].map(([id, entry]) => [id, entry.render]));
@@ -182,7 +200,7 @@ export function createRenderController(deps: ControllerDeps): RenderController {
     { asset, spec }: Extract<Target, { ok: true }>,
   ): void {
     const result = renderedValidation(card, asset, spec, made.plan, made.result);
-    if (!sameResult(result, card.validation)) deps.writeResult(card.id, result);
+    if (!sameResult(result, card.validation)) record(card.id, result);
   }
 
   function start(card: Card, target: Target): void {
@@ -199,7 +217,9 @@ export function createRenderController(deps: ControllerDeps): RenderController {
     const jobId = `${card.id}#${nextJob}`;
     const entry: Tracked = { key: target.key, jobId, render: { kind: 'waiting' } };
     tracked.set(card.id, entry);
-    void run(card.id, jobId, current.id, target);
+    const running = run(card.id, jobId, current.id, target);
+    runs.add(running);
+    void running.finally(() => runs.delete(running));
   }
 
   async function run(
@@ -283,6 +303,8 @@ export function createRenderController(deps: ControllerDeps): RenderController {
 
   function sync(session: BoardSession): void {
     if (disposed) return;
+    const found: [string, ValidationResult][] = [];
+    held = found;
     if (session.id !== current.id) {
       for (const id of [...tracked.keys()]) forget(id);
     }
@@ -301,7 +323,9 @@ export function createRenderController(deps: ControllerDeps): RenderController {
       if (entry) stopJob(entry);
       start(card, target);
     }
+    held = null;
     changed();
+    for (const [cardId, result] of found) deps.writeResult(cardId, result);
   }
 
   function renderAgain(cardId: string): void {
@@ -348,12 +372,17 @@ export function createRenderController(deps: ControllerDeps): RenderController {
     listeners.clear();
   }
 
+  async function idle(): Promise<void> {
+    while (runs.size > 0) await Promise.allSettled([...runs]);
+  }
+
   return {
     sync,
     renderAgain,
     cancel,
     cancelAll,
     dispose,
+    idle,
     snapshot: () => view,
     subscribe(listener) {
       listeners.add(listener);

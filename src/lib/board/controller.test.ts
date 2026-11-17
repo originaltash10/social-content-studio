@@ -1,3 +1,8 @@
+/**
+ * Tests for the render controller. Nothing here waits on a timer: a test waits for a job to
+ * reach the fake worker client (`sent`), or for the controller to finish everything it started
+ * (`controller.idle()`), so the outcome never depends on how fast the machine is.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPlacement } from '../platforms';
 import { planRender } from '../render/plan';
@@ -26,23 +31,54 @@ type Call = {
   onProgress: (progress: RenderProgress) => void;
   resolve: (result: RenderResult) => void;
   reject: (error: unknown) => void;
+  /** True once the job has been answered or cancelled. */
+  settled: boolean;
 };
 
-/** A worker client whose jobs finish only when the test says so. */
+/**
+ * A worker client whose jobs finish only when the test says so. Like the real client, cancel
+ * rejects a pending job as cancelled and returns false for one that has already finished.
+ */
 function fakeClient() {
   const calls: Call[] = [];
   const cancelled: string[] = [];
+  const waiters: { count: number; done: () => void }[] = [];
   return {
     calls,
     cancelled,
+    /** Resolves once `count` jobs have been sent. */
+    sent(count: number): Promise<void> {
+      if (calls.length >= count) return Promise.resolve();
+      return new Promise((done) => waiters.push({ count, done }));
+    },
     render: vi.fn(
       (job: RenderJob, onProgress: (progress: RenderProgress) => void = () => undefined) =>
         new Promise<RenderResult>((resolve, reject) => {
-          calls.push({ job, onProgress, resolve, reject });
+          const entry: Call = {
+            job,
+            onProgress,
+            settled: false,
+            resolve: (result) => {
+              entry.settled = true;
+              resolve(result);
+            },
+            reject: (error) => {
+              entry.settled = true;
+              reject(error);
+            },
+          };
+          calls.push(entry);
+          for (const waiter of waiters.filter((w) => calls.length >= w.count)) {
+            waiters.splice(waiters.indexOf(waiter), 1);
+            waiter.done();
+          }
         }),
     ),
     cancel: vi.fn((id: string) => {
       cancelled.push(id);
+      const pending = calls.find((c) => c.job.id === id && !c.settled);
+      if (!pending) return false;
+      pending.reject(cancelledError(pending.job.fileName));
       return true;
     }),
   };
@@ -117,9 +153,6 @@ function resultFor(job: RenderJob, overrides: Partial<RenderResult> = {}): Rende
   };
 }
 
-/** Lets pending promises (the file-type check, a finished render) run. */
-const settle = () => new Promise((done) => setTimeout(done, 0));
-
 let client: ReturnType<typeof fakeClient>;
 let urls: ReturnType<typeof fakeUrls>;
 let writes: [string, ValidationResult][];
@@ -142,6 +175,22 @@ const call = (index: number): Call => {
   if (!found) throw new Error(`no render call ${index}`);
   return found;
 };
+/** Answers job `index` with a file at its planned size. */
+const finish = (index: number, overrides: Partial<RenderResult> = {}) =>
+  call(index).resolve(resultFor(call(index).job, overrides));
+const writtenFor = (id: string) => writes.filter(([cardId]) => cardId === id);
+
+/** Resolves when `check` holds for the controller's state, checking on every change it reports. */
+function until(check: () => boolean): Promise<void> {
+  if (check()) return Promise.resolve();
+  return new Promise((done) => {
+    const stop = controller.subscribe(() => {
+      if (!check()) return;
+      stop();
+      done();
+    });
+  });
+}
 
 beforeEach(() => {
   client = fakeClient();
@@ -162,7 +211,7 @@ describe('rendering a card', () => {
     const c = card('c1');
     controller.sync(session([c]));
     expect(renderOf('c1')).toEqual({ kind: 'waiting' });
-    await settle();
+    await client.sent(1);
     expect(client.render).toHaveBeenCalledTimes(1);
     const { job } = call(0);
     expect(job.fileName).toBe(ASSET.fileName);
@@ -174,7 +223,7 @@ describe('rendering a card', () => {
 
   it('shows each stage of the render as it happens', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const { onProgress } = call(0);
     onProgress('queued');
     expect(renderOf('c1')).toEqual({ kind: 'waiting' });
@@ -193,11 +242,11 @@ describe('rendering a card', () => {
   it('keeps the finished file, gives it a URL, and records the validation result', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
+    await client.sent(1);
     const { job, resolve } = call(0);
     const result = resultFor(job, { upscaled: true });
     resolve(result);
-    await settle();
+    await controller.idle();
     expect(renderOf('c1')).toEqual({
       kind: 'done',
       url: 'blob:render-1',
@@ -215,30 +264,29 @@ describe('rendering a card', () => {
   it('records nothing when the result is the one the card already has', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
+    await client.sent(1);
     const { job } = call(0);
     const result = resultFor(job);
     const same = renderedValidation(c, ASSET, FEED, job.plan, result);
     controller.sync(session([{ ...c, validation: same }]));
     call(0).resolve(result);
-    await settle();
+    await controller.idle();
     expect(renderOf('c1')?.kind).toBe('done');
     expect(writes).toEqual([]);
   });
 
   it('records a failing result for a file of the wrong size', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
-    const { job, resolve } = call(0);
-    resolve(resultFor(job, { width: 1000, height: 1000 }));
-    await settle();
+    await client.sent(1);
+    finish(0, { width: 1000, height: 1000 });
+    await controller.idle();
     expect(writes[0]?.[1].level).toBe('fail');
     expect(writes[0]?.[1].issues.map((issue) => issue.rule)).toContain(1);
   });
 
   it('sends every card at once and lets the worker queue them', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE)]));
-    await settle();
+    await client.sent(2);
     expect(client.calls.map((c) => c.job.plan.target)).toEqual([target(FEED), target(SQUARE)]);
     expect(new Set(client.calls.map((c) => c.job.id)).size).toBe(2);
   });
@@ -246,18 +294,20 @@ describe('rendering a card', () => {
   it('does not render a card again when nothing it is made from has changed', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
     controller.sync(session([{ ...c, copy: { ...c.copy, caption: 'New words' } }]));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     expect(client.render).toHaveBeenCalledTimes(1);
+    expect(client.cancelled).toEqual([]);
   });
 
   it('checks a finished card again when its words change, without rendering it again', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     writes.length = 0;
     const withLink = { ...c, copy: { ...c.copy, caption: 'See https://example.com' } };
     controller.sync(session([withLink]));
@@ -269,9 +319,9 @@ describe('rendering a card', () => {
   it('checks a finished card again after undo restored an older result', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     const fresh = writes[0]?.[1] as ValidationResult;
     writes.length = 0;
     // The store now holds `fresh`; an undo puts the card back with its earlier result.
@@ -284,18 +334,17 @@ describe('rendering a card', () => {
   it('renders again when the crop changes, and releases the old file', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     expect(urls.live()).toEqual(['blob:render-1']);
     const cropped = { ...c, edit: { ...c.edit, crop: { x: 0, y: 0, width: 0.5, height: 1 } } };
     controller.sync(session([cropped]));
     expect(urls.revoked).toEqual(['blob:render-1']);
     expect(renderOf('c1')).toEqual({ kind: 'waiting' });
-    await settle();
-    expect(client.render).toHaveBeenCalledTimes(2);
-    call(1).resolve(resultFor(call(1).job));
-    await settle();
+    await client.sent(2);
+    finish(1);
+    await controller.idle();
     expect(urls.live()).toEqual(['blob:render-2']);
   });
 });
@@ -303,7 +352,7 @@ describe('rendering a card', () => {
 describe('cards that cannot be rendered', () => {
   it('says the original file is missing when it is listed as missing', async () => {
     controller.sync(session([card('c1')], { missingAssetIds: [ASSET.id] }));
-    await settle();
+    await controller.idle();
     expect(renderOf('c1')).toEqual({ kind: 'failed', message: missingFileMessage(ASSET.fileName) });
     expect(client.render).not.toHaveBeenCalled();
   });
@@ -317,7 +366,7 @@ describe('cards that cannot be rendered', () => {
   it('renders once the missing file is supplied', async () => {
     controller.sync(session([card('c1')], { missingAssetIds: [ASSET.id] }));
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     expect(client.render).toHaveBeenCalledTimes(1);
   });
 
@@ -351,11 +400,7 @@ describe('cards that cannot be rendered', () => {
   });
 
   it('says something went wrong when planning fails unexpectedly', () => {
-    const broken = createRenderController({
-      client,
-      blobOf: (id) => blobs.get(id),
-      writeResult: () => undefined,
-      urls: urls.api,
+    const broken = make({
       specOf: () => ({ ...FEED, mediaTypes: ['image'], sizes: null as unknown as [] }),
     });
     broken.sync(session([card('c1')]));
@@ -367,9 +412,8 @@ describe('cards that cannot be rendered', () => {
   it('passes on the message when the file is not a usable image', async () => {
     blobs.set(ASSET.id, new Blob(['not an image']));
     controller.sync(session([card('c1')]));
-    await settle();
-    const render = renderOf('c1');
-    expect(render?.kind).toBe('failed');
+    await controller.idle();
+    expect(renderOf('c1')?.kind).toBe('failed');
     expect(client.render).not.toHaveBeenCalled();
   });
 
@@ -377,16 +421,16 @@ describe('cards that cannot be rendered', () => {
     controller.dispose();
     controller = make({ sniff: () => Promise.reject(new Error('read failed')) });
     controller.sync(session([card('c1')]));
-    await settle();
+    await controller.idle();
     const render = renderOf('c1');
     expect(render?.kind === 'failed' && render.message).toMatch(/something unexpected went wrong/);
   });
 
   it("passes on the worker's message when a render fails", async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     call(0).reject(new RenderError('canvas', 'The browser may be short of memory.'));
-    await settle();
+    await controller.idle();
     expect(renderOf('c1')).toEqual({
       kind: 'failed',
       message: 'The browser may be short of memory.',
@@ -396,9 +440,9 @@ describe('cards that cannot be rendered', () => {
 
   it('says something went wrong for an error that is not a render error', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     call(0).reject(new Error('boom'));
-    await settle();
+    await controller.idle();
     const render = renderOf('c1');
     expect(render?.kind === 'failed' && render.message).toMatch(/something unexpected went wrong/);
   });
@@ -407,24 +451,26 @@ describe('cards that cannot be rendered', () => {
 describe('cancel', () => {
   it('cancels a waiting render and tells the worker', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const jobId = call(0).job.id;
     expect(controller.cancel('c1')).toBe(true);
     expect(client.cancelled).toEqual([jobId]);
+    expect(renderOf('c1')).toEqual({ kind: 'cancelled' });
+    await controller.idle();
     expect(renderOf('c1')).toEqual({ kind: 'cancelled' });
   });
 
   it('cancels before the job has even been sent', async () => {
     controller.sync(session([card('c1')]));
     expect(controller.cancel('c1')).toBe(true);
-    await settle();
+    await controller.idle();
     expect(client.render).not.toHaveBeenCalled();
     expect(renderOf('c1')).toEqual({ kind: 'cancelled' });
   });
 
   it('cancels a render under way', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     call(0).onProgress('drawing');
     expect(controller.cancel('c1')).toBe(true);
     expect(renderOf('c1')).toEqual({ kind: 'cancelled' });
@@ -432,9 +478,9 @@ describe('cancel', () => {
 
   it("shows cancelled when the worker reports a cancel the board didn't ask for", async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     call(0).reject(cancelledError(ASSET.fileName));
-    await settle();
+    await controller.idle();
     expect(renderOf('c1')).toEqual({ kind: 'cancelled' });
   });
 
@@ -443,52 +489,56 @@ describe('cancel', () => {
     controller.sync(session([card('c1')], { missingAssetIds: [ASSET.id] }));
     expect(controller.cancel('c1')).toBe(false);
     controller.sync(session([card('c2')]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     expect(controller.cancel('c2')).toBe(false);
   });
 
   it('cancels every pending render and leaves finished ones alone', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE), card('c3')]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(3);
+    finish(0);
+    await until(() => renderOf('c1')?.kind === 'done');
     expect(controller.cancelAll()).toBe(2);
-    expect(renderOf('c1')?.kind).toBe('done');
     expect(renderOf('c2')).toEqual({ kind: 'cancelled' });
     expect(renderOf('c3')).toEqual({ kind: 'cancelled' });
     expect(controller.cancelAll()).toBe(0);
+    await controller.idle();
+    expect(renderOf('c2')).toEqual({ kind: 'cancelled' });
   });
 
   it('a cancelled card stays cancelled until Render again', async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
+    await client.sent(1);
     controller.cancel('c1');
     controller.sync(session([c]));
-    await settle();
+    await controller.idle();
     expect(client.render).toHaveBeenCalledTimes(1);
     controller.renderAgain('c1');
     expect(renderOf('c1')).toEqual({ kind: 'waiting' });
-    await settle();
-    expect(client.render).toHaveBeenCalledTimes(2);
-    call(1).resolve(resultFor(call(1).job));
-    await settle();
+    await client.sent(2);
+    finish(1);
+    await controller.idle();
     expect(renderOf('c1')?.kind).toBe('done');
   });
 
   it('Render again replaces a finished file and cancels a pending one', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
     controller.renderAgain('c1');
     expect(urls.revoked).toEqual(['blob:render-1']);
-    await settle();
+    await client.sent(2);
     const pending = call(1).job.id;
     controller.renderAgain('c1');
     expect(client.cancelled).toEqual([pending]);
+    await client.sent(3);
+    finish(2);
+    await controller.idle();
+    expect(urls.live()).toEqual(['blob:render-2']);
   });
 
   it('Render again does nothing for an unknown card', () => {
@@ -500,121 +550,264 @@ describe('cancel', () => {
 });
 
 describe('a finished file nobody wants any more is discarded', () => {
-  /** Asserts the late file got no URL, no validation, and changed nothing on screen. */
-  async function expectDiscarded(late: Call, cardId: string, before: CardRender | undefined) {
-    const urlsBefore = urls.made.length;
-    late.resolve(resultFor(late.job));
-    await settle();
-    expect(writes.filter(([id]) => id === cardId)).toEqual([]);
-    expect(urls.made).toHaveLength(urlsBefore);
-    expect(renderOf(cardId)).toEqual(before);
-  }
+  // The race that matters: the worker finishes a job, so the client has already settled it and
+  // cancel has nothing to stop, but the controller has not seen the file yet when the card
+  // changes. `late.resolve(...)` followed straight away by the change reproduces that order.
 
   it("when it arrives after the card's plan changed", async () => {
     const c = card('c1');
     controller.sync(session([c]));
-    await settle();
+    await client.sent(1);
     const late = call(0);
+    late.resolve(resultFor(late.job));
     const cropped = { ...c, edit: { ...c.edit, crop: { x: 0.2, y: 0, width: 0.5, height: 1 } } };
     controller.sync(session([cropped]));
     expect(client.cancelled).toEqual([late.job.id]);
-    await expectDiscarded(late, 'c1', { kind: 'waiting' });
+    await client.sent(2);
+    // The late file got no URL and was not checked; the card waits for its new file.
+    expect(urls.made).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(renderOf('c1')).toEqual({ kind: 'waiting' });
     // Its progress is ignored too.
     late.onProgress('encoding');
     expect(renderOf('c1')).toEqual({ kind: 'waiting' });
     // The new render is the one that counts.
-    await settle();
-    call(1).resolve(resultFor(call(1).job));
-    await settle();
-    expect(writes.map(([id]) => id)).toEqual(['c1']);
+    finish(1);
+    await controller.idle();
+    expect(writtenFor('c1')).toHaveLength(1);
+    expect(urls.made).toEqual(['blob:render-1']);
     expect(urls.live()).toEqual(['blob:render-1']);
+  });
+
+  it('when the plan changed before the worker finished: the cancelled job is ignored', async () => {
+    const c = card('c1');
+    controller.sync(session([c]));
+    await client.sent(1);
+    const cropped = { ...c, edit: { ...c.edit, crop: { x: 0.2, y: 0, width: 0.5, height: 1 } } };
+    controller.sync(session([cropped]));
+    expect(call(0).settled).toBe(true);
+    await client.sent(2);
+    expect(renderOf('c1')).toEqual({ kind: 'waiting' });
+    finish(1);
+    await controller.idle();
+    expect(renderOf('c1')?.kind).toBe('done');
   });
 
   it('when it arrives after the card was removed', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE)]));
-    await settle();
+    await client.sent(2);
     const late = call(0);
+    late.resolve(resultFor(late.job));
     controller.sync(session([card('c2', SQUARE)]));
-    expect(client.cancelled).toEqual([late.job.id]);
     expect(renderOf('c1')).toBeUndefined();
-    await expectDiscarded(late, 'c1', undefined);
+    finish(1);
+    await controller.idle();
+    expect(writtenFor('c1')).toEqual([]);
+    expect(writtenFor('c2')).toHaveLength(1);
+    expect(urls.made).toEqual(['blob:render-1']);
+    expect(urls.live()).toEqual(['blob:render-1']);
+    expect(renderOf('c1')).toBeUndefined();
   });
 
   it('when it arrives after another session was opened', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const late = call(0);
+    late.resolve(resultFor(late.job));
     controller.sync(session([card('c1')], { id: 'session-2' }));
-    expect(client.cancelled).toEqual([late.job.id]);
-    await settle();
     // The same card id in the new session is rendered afresh, not with the old file.
-    expect(client.render).toHaveBeenCalledTimes(2);
-    await expectDiscarded(late, 'c1', { kind: 'waiting' });
+    await client.sent(2);
+    expect(urls.made).toEqual([]);
+    expect(writes).toEqual([]);
+    expect(renderOf('c1')).toEqual({ kind: 'waiting' });
+    finish(1);
+    await controller.idle();
+    expect(writtenFor('c1')).toHaveLength(1);
+    expect(urls.made).toEqual(['blob:render-1']);
   });
 
   it('when it arrives after the session was closed', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const late = call(0);
+    late.resolve(resultFor(late.job));
     controller.sync(session([], { id: null, assets: [] }));
-    await expectDiscarded(late, 'c1', undefined);
+    await controller.idle();
+    expect(writes).toEqual([]);
+    expect(urls.made).toEqual([]);
+    expect(renderOf('c1')).toBeUndefined();
   });
 
   it('when it fails after it stopped being wanted', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const late = call(0);
-    controller.sync(session([]));
     late.reject(new RenderError('canvas', 'late failure'));
-    await settle();
+    controller.sync(session([]));
+    await controller.idle();
     expect(renderOf('c1')).toBeUndefined();
   });
 
   it('when the file type check finishes after it stopped being wanted', async () => {
     controller.sync(session([card('c1')]));
     controller.sync(session([]));
-    await settle();
+    await controller.idle();
     expect(client.render).not.toHaveBeenCalled();
     expect(renderOf('c1')).toBeUndefined();
   });
 
   it('when it arrives after the controller was disposed', async () => {
     controller.sync(session([card('c1')]));
-    await settle();
+    await client.sent(1);
     const late = call(0);
+    late.resolve(resultFor(late.job));
     controller.dispose();
-    await expectDiscarded(late, 'c1', undefined);
+    await controller.idle();
+    expect(writes).toEqual([]);
+    expect(urls.made).toEqual([]);
+    expect(renderOf('c1')).toBeUndefined();
+  });
+});
+
+describe('sequences the board can produce', () => {
+  it('Render again and Cancel for a card that undo just removed do nothing', async () => {
+    controller.sync(session([card('c1')]));
+    await client.sent(1);
+    // Ctrl-Z removes the card; a click that was already on its way arrives afterwards.
+    controller.sync(session([]));
+    controller.renderAgain('c1');
+    expect(controller.cancel('c1')).toBe(false);
+    await controller.idle();
+    expect(client.render).toHaveBeenCalledTimes(1);
+    expect(renderOf('c1')).toBeUndefined();
+    expect(writes).toEqual([]);
+  });
+
+  it('Duplicate while the original is rendering leaves the original job alone', async () => {
+    const original = card('c1');
+    controller.sync(session([original]));
+    await client.sent(1);
+    call(0).onProgress('drawing');
+    const copy = card('c2', FEED, { parentId: 'c1', version: 2 });
+    controller.sync(session([original, copy]));
+    expect(client.cancelled).toEqual([]);
+    expect(renderOf('c1')).toEqual({ kind: 'working', stage: 'drawing' });
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    expect(writtenFor('c1')).toHaveLength(1);
+    expect(writtenFor('c2')).toHaveLength(1);
+    expect(urls.live()).toEqual(['blob:render-1', 'blob:render-2']);
+  });
+
+  it('the same session synced twice, as React runs effects twice in development, sends one job', async () => {
+    const open = session([card('c1')]);
+    controller.sync(open);
+    controller.sync(open);
+    await client.sent(1);
+    finish(0);
+    await controller.idle();
+    expect(client.render).toHaveBeenCalledTimes(1);
+    expect(writes).toHaveLength(1);
+  });
+
+  it('a controller disposed and replaced on remount leaves nothing behind', async () => {
+    const open = session([card('c1')]);
+    controller.sync(open);
+    await client.sent(1);
+    controller.dispose();
+    expect(call(0).settled).toBe(true);
+    controller = make();
+    controller.sync(open);
+    await client.sent(2);
+    finish(1);
+    await controller.idle();
+    expect(writes).toHaveLength(1);
+    expect(urls.made).toEqual(['blob:render-1']);
+    expect(urls.live()).toEqual(['blob:render-1']);
+  });
+
+  it('a store listener that syncs again while results are recorded sees a finished sync', async () => {
+    // writeResult updates the "store" and syncs straight away, as a direct store subscription
+    // would. Each write also notes whether the controller already lists every card in the
+    // session it was given: it would not if the write came part-way through a sync.
+    let live = session([card('c1'), card('c2', SQUARE)]);
+    const applied: string[] = [];
+    const sawWholeSession: boolean[] = [];
+    controller.dispose();
+    controller = make({
+      writeResult: (id, result) => {
+        applied.push(id);
+        sawWholeSession.push(live.cards.every((c) => controller.snapshot().has(c.id)));
+        live = {
+          ...live,
+          cards: live.cards.map((c) => (c.id === id ? { ...c, validation: result } : c)),
+        };
+        controller.sync(live);
+      },
+    });
+    controller.sync(live);
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    applied.length = 0;
+    sawWholeSession.length = 0;
+    // One change removes the alt text from both cards (a warning on both platforms) and adds a
+    // third card at the end, so the sync finds results before it reaches the new card.
+    live = {
+      ...live,
+      cards: [
+        ...live.cards.map((c) => ({ ...c, copy: { ...c.copy, altText: '' } })),
+        card('c3', SQUARE),
+      ],
+    };
+    controller.sync(live);
+    expect(sawWholeSession).toEqual([true, true, true]);
+    // c1's result is recorded first; the sync that starts records c2's; the outer sync's own
+    // result for c2 then comes through again with the same value.
+    expect(applied).toEqual(['c1', 'c2', 'c2']);
+    for (const c of live.cards.slice(0, 2)) {
+      expect(c.validation.issues.map((issue) => issue.rule)).toContain(8);
+      expect(renderOf(c.id)?.kind).toBe('done');
+    }
+    // The new card was started once, not once per sync.
+    await client.sent(3);
+    expect(client.render).toHaveBeenCalledTimes(3);
+    finish(2);
+    await controller.idle();
   });
 });
 
 describe('object URLs', () => {
-  async function finishAll() {
-    await settle();
-    for (const c of client.calls) c.resolve(resultFor(c.job));
-    await settle();
+  async function finishAll(count: number) {
+    await client.sent(count);
+    for (let index = 0; index < count; index++) finish(index);
+    await controller.idle();
   }
 
   it('are revoked when a render is replaced', async () => {
     controller.sync(session([card('c1')]));
-    await finishAll();
+    await finishAll(1);
     controller.renderAgain('c1');
-    await settle();
-    call(1).resolve(resultFor(call(1).job));
-    await settle();
+    await client.sent(2);
+    finish(1);
+    await controller.idle();
     expect(urls.made).toEqual(['blob:render-1', 'blob:render-2']);
     expect(urls.live()).toEqual(['blob:render-2']);
   });
 
   it('are revoked when their card goes away', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE)]));
-    await finishAll();
+    await finishAll(2);
     controller.sync(session([card('c2', SQUARE)]));
     expect(urls.live()).toEqual(['blob:render-2']);
   });
 
   it('are all revoked when the session closes', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE)]));
-    await finishAll();
+    await finishAll(2);
     controller.sync(session([], { id: null, assets: [] }));
     expect(urls.made).toHaveLength(2);
     expect(urls.live()).toEqual([]);
@@ -623,14 +816,14 @@ describe('object URLs', () => {
 
   it('are all revoked when another session is opened', async () => {
     controller.sync(session([card('c1')]));
-    await finishAll();
+    await finishAll(1);
     controller.sync(session([], { id: 'session-2' }));
     expect(urls.live()).toEqual([]);
   });
 
   it('are all revoked on dispose, and nothing happens afterwards', async () => {
     controller.sync(session([card('c1'), card('c2', SQUARE)]));
-    await finishAll();
+    await finishAll(2);
     const listener = vi.fn();
     controller.subscribe(listener);
     controller.dispose();
@@ -640,7 +833,7 @@ describe('object URLs', () => {
     controller.sync(session([card('c3')]));
     controller.renderAgain('c1');
     controller.dispose();
-    await settle();
+    await controller.idle();
     expect(listener).not.toHaveBeenCalled();
     expect(client.render).toHaveBeenCalledTimes(2);
   });
@@ -656,9 +849,9 @@ describe('object URLs', () => {
       writeResult: () => undefined,
     });
     real.sync(session([card('c1')]));
-    await settle();
-    call(0).resolve(resultFor(call(0).job));
-    await settle();
+    await client.sent(1);
+    finish(0);
+    await real.idle();
     expect(create).toHaveBeenCalledTimes(1);
     real.dispose();
     expect(revoke).toHaveBeenCalledWith('blob:browser');
@@ -672,13 +865,35 @@ describe('listeners', () => {
     controller.sync(session([card('c1')]));
     expect(listener).toHaveBeenCalledTimes(1);
     const first = controller.snapshot();
-    await settle();
+    await client.sent(1);
     call(0).onProgress('decoding');
     expect(listener).toHaveBeenCalledTimes(2);
     expect(controller.snapshot()).not.toBe(first);
     stop();
     call(0).onProgress('drawing');
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('idle', () => {
+  it('resolves straight away when nothing has started', async () => {
+    await expect(controller.idle()).resolves.toBeUndefined();
+  });
+
+  it('waits for renders started while it was waiting', async () => {
+    controller.sync(session([card('c1')]));
+    await client.sent(1);
+    let done = false;
+    const waiting = controller.idle().then(() => {
+      done = true;
+    });
+    finish(0);
+    controller.renderAgain('c1');
+    await client.sent(2);
+    expect(done).toBe(false);
+    finish(1);
+    await waiting;
+    expect(renderOf('c1')?.kind).toBe('done');
   });
 });
 
