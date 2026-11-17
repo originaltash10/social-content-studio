@@ -26,8 +26,8 @@ The app is not yet usable for making posts. What works today:
   placement's size, as JPG or PNG, is built and tested. Nothing on screen uses it yet; it will be
   usable from the board of posts in a later step.
 
-The screen is a plain test panel for sessions and importing. Importing video, cropping and
-resizing, captions, the board of posts and export are planned but not built yet.
+The screen is a plain test panel for sessions and importing. Still planned and not built yet:
+importing video, captions, the board of posts, the editor for adjusting a crop, and export.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy
