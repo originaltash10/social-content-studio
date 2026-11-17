@@ -183,7 +183,7 @@ Stack decisions for Claude Code to follow:
 | Framework | React 18, TypeScript, Vite | Fast dev loop, strong typing for the data model |
 | State | Zustand with Immer | Single store, cheap undo via snapshots |
 | Styling | Tailwind CSS | Quick to iterate on a board UI |
-| Canvas | Fabric.js for the image editor | Object model for text, logos, crops with drag handles |
+| Canvas | Phase 1 crop and focal point use plain elements with pointer events. Whether to use Fabric.js for Phase 2 text and logo overlays is decided at the start of Phase 2 | The crop and focal point need no canvas library. Fabric 7 adds node-canvas and jsdom as optional dependencies |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap` | Keeps the UI responsive during batch resize |
 | HEIC decode | `heic-to` or `libheif-js` | iPhone photos |
 | Video | WebCodecs via `mediabunny` (demux, decode, encode, mux MP4) | Hardware-accelerated; ffmpeg.wasm only as fallback for unsupported codecs |

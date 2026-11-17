@@ -36,7 +36,7 @@ Keep each task to one feature row from the SPEC feature table.
 | Framework        | React 18, TypeScript (strict + `noUncheckedIndexedAccess`), Vite        |
 | State            | Zustand with Immer; single session store, snapshot-based undo (50)      |
 | Styling          | Tailwind CSS v4 (via `@tailwindcss/vite`)                               |
-| Canvas           | Fabric.js for the image editor (Phase 1 step 7+)                        |
+| Canvas           | Plain elements, pointer events (Phase 1); Fabric.js decided in Phase 2  |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap`                    |
 | HEIC decode      | `heic-to` or `libheif-js`                                               |
 | Video            | WebCodecs via `mediabunny`; ffmpeg.wasm only as fallback (Phase 3)      |
