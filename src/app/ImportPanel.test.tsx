@@ -283,21 +283,25 @@ describe('with a session open', () => {
   });
 
   it('does not add a file to a different session that was opened during the import', async () => {
-    let release: () => void = () => undefined;
+    // One release per decode. "Working…" shows before the file is hashed, so wait for the
+    // decode itself to start before releasing it.
+    const release: (() => void)[] = [];
     vi.mocked(inspectImage).mockImplementation(
       () =>
         new Promise((resolve) => {
-          release = () => resolve({ width: 10, height: 10, thumbnail: thumb('late') });
+          release.push(() => resolve({ width: 10, height: 10, thumbnail: thumb('late') }));
         }),
     );
     render(<ImportPanel />);
     drop(file('late.jpg', JPEG), file('later.jpg', JPEG, 'other'));
-    await waitFor(() => expect(results()).toHaveTextContent('Working…'));
+    await waitFor(() => expect(release).toHaveLength(1));
+    expect(results()).toHaveTextContent('Working…');
 
     act(() => store().createSession('Another session'));
-    act(() => release());
+    act(() => release[0]?.());
     await waitFor(() => expect(results()).toHaveTextContent('Not added, because the session was'));
-    act(() => release());
+    await waitFor(() => expect(release).toHaveLength(2));
+    act(() => release[1]?.());
     await finished('Import finished: 2 not imported.');
 
     expect(store().session?.name).toBe('Another session');
