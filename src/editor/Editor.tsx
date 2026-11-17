@@ -5,7 +5,9 @@
  * What it writes, and when. Opening the editor writes nothing: a stored crop that is smaller
  * than the editor allows is enlarged for display only. The card is changed with one
  * `updateCard` when a drag is released with a different crop, when an arrow key moves the
- * crop or plus or minus resizes it, and when Reset crop is pressed. Each of those is one undo step and marks the session as
+ * crop or plus or minus resizes it, and when Reset crop is pressed. Moving the focal point is
+ * one `setAssetFocal`, on release or per arrow key: it moves the point and re-centres every
+ * card of this photo that is still on its automatic crop, together, as one step. Each of those is one undo step and marks the session as
  * changed, so autosave picks it up. The board then renders and checks the card again.
  *
  * Undo. While the editor is open, Ctrl/Cmd-Z belongs to it: it undoes only the changes made
@@ -23,14 +25,18 @@ import {
   cropLimits,
   isAutomaticCrop,
   moveCrop,
+  movePoint,
   resizeDelta,
   scaleCrop,
 } from '../lib/editor/geometry';
+import type { Point } from '../lib/editor/geometry';
+import { recentredCrops } from '../lib/editor/focal';
+import { getPlacement } from '../lib/platforms';
 import { UNDO_LIMIT, useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, ImageEdit, Rect, Size } from '../types';
 import { buttonClass } from '../app/styles';
 import { CropStage } from './CropStage';
-import { cropReadout, stageLabel } from './text';
+import { cropReadout, focalLabel, focalReadout, stageLabel } from './text';
 import { useSourcePhoto } from './useSourcePhoto';
 import type { PhotoLoader } from './useSourcePhoto';
 
@@ -49,7 +55,12 @@ export type EditorProps = {
 export const LOADING_TEXT = 'Opening the photo so you can adjust the crop…';
 export const HELP_TEXT =
   'Drag the crop to move it, or drag a corner to resize it. With the crop area selected, the ' +
-  'arrow keys move it, and plus and minus resize it; hold Shift for bigger steps.';
+  'arrow keys move it, and plus and minus resize it; hold Shift for bigger steps. The round ' +
+  'marker is the focal point, which automatic crops are centred on: drag it, or select it and ' +
+  'use the arrow keys.';
+
+/** A card's output size, from src/data/platforms.json; undefined for an unknown placement. */
+const targetOf = (card: Card) => getPlacement(card.platform, card.placement)?.sizes[0];
 
 /** True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead. */
 function isTyping(target: EventTarget | null): boolean {
@@ -72,6 +83,7 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
     loadPhoto,
   );
   const readoutId = useId();
+  const focalReadoutId = useId();
   /** How many of the newest undo steps were made here since the editor opened. */
   const steps = useRef(0);
 
@@ -103,6 +115,27 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
       if (isImageEdit(draft.edit)) draft.edit.crop = crop;
     });
     if (changed) steps.current = Math.min(steps.current + 1, UNDO_LIMIT);
+  }
+
+  /** Moves the focal point: one store change and one undo step, or nothing if it is the same. */
+  function writeFocal(focal: Point) {
+    const store = useSessionStore.getState();
+    const before = store.revision;
+    const crops = recentredCrops(store.session?.cards ?? [], asset, focal, targetOf);
+    store.setAssetFocal(asset.id, focal, crops);
+    if (useSessionStore.getState().revision !== before) {
+      steps.current = Math.min(steps.current + 1, UNDO_LIMIT);
+    }
+  }
+
+  function onFocalKeyDown(event: KeyboardEvent<HTMLButtonElement>) {
+    // The marker's keys are its own: they must not also move or resize the crop.
+    event.stopPropagation();
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    const move = arrowDelta(event.key, event.shiftKey);
+    if (!move) return;
+    event.preventDefault();
+    writeFocal(movePoint(asset.focal, move.dx, move.dy));
   }
 
   function onStageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -142,9 +175,18 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
         label={stageLabel(asset.fileName)}
         describedBy={readoutId}
         onKeyDown={onStageKeyDown}
+        focal={asset.focal}
+        cropFor={(focal) => (automatic ? automaticCrop(source, target, focal) : shown)}
+        onFocalCommit={writeFocal}
+        focalLabel={focalLabel(asset.fileName)}
+        focalDescribedBy={focalReadoutId}
+        onFocalKeyDown={onFocalKeyDown}
       />
       <p id={readoutId} aria-live="polite" className="text-label text-ink-secondary">
         {cropReadout(shown)}
+      </p>
+      <p id={focalReadoutId} aria-live="polite" className="text-label text-ink-secondary">
+        {focalReadout(asset.focal)}
       </p>
       <p className="text-label text-muted-text">{HELP_TEXT}</p>
       <div>

@@ -7,14 +7,18 @@
  * is under way the new crop is held here only; `onCommit` is called once, on release, and only
  * if the crop actually changed. A cancelled drag changes nothing.
  *
+ * The round marker is the photo's focal point, which every automatic crop is centred on. It is
+ * dragged the same way, with one `onFocalCommit` on release. While it is dragged, `cropFor`
+ * says what the crop would become, so the crop is seen to follow.
+ *
  * Everything is placed in percentages of the photo's frame, so the area can change size with
  * the dialog or the window without the crop changing: a crop is always fractions of the photo.
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, PointerEvent, ReactNode } from 'react';
+import type { KeyboardEvent, PointerEvent } from 'react';
 import { moveCrop, resizeCrop, toPhoto } from '../lib/editor/geometry';
-import type { Corner, CropLimits } from '../lib/editor/geometry';
+import type { Corner, CropLimits, Point } from '../lib/editor/geometry';
 import type { DisplayPhoto } from '../lib/editor/sourcePhoto';
 import type { Rect } from '../types';
 import { focusClass } from '../app/styles';
@@ -31,7 +35,16 @@ export type CropStageProps = {
   /** The id of the text that describes where the crop is. */
   describedBy?: string;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
-  children?: ReactNode;
+  /** The photo's focal point, in fractions of the photo. */
+  focal: Point;
+  /** The crop to show while the focal point is being dragged to `focal`. */
+  cropFor: (focal: Point) => Rect;
+  /** Called once when a drag of the focal point ends somewhere new. */
+  onFocalCommit: (focal: Point) => void;
+  /** Says what the marker is and what the arrow keys do, for screen readers. */
+  focalLabel: string;
+  focalDescribedBy?: string;
+  onFocalKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 };
 
 /** The size of each corner's touch target, in CSS pixels. The square drawn inside is smaller. */
@@ -42,7 +55,8 @@ const CORNERS: readonly Corner[] = ['nw', 'ne', 'sw', 'se'];
 type Drag =
   | { kind: 'move'; pointerId: number; startX: number; startY: number; from: Rect }
   /** `offsetX/Y`: where the handle was grabbed, measured from the corner itself. */
-  | { kind: 'resize'; pointerId: number; corner: Corner; offsetX: number; offsetY: number };
+  | { kind: 'resize'; pointerId: number; corner: Corner; offsetX: number; offsetY: number }
+  | { kind: 'focal'; pointerId: number; offsetX: number; offsetY: number };
 
 const percent = (fraction: number) => `${fraction * 100}%`;
 const sameRect = (a: Rect, b: Rect) =>
@@ -54,7 +68,9 @@ export function CropStage(props: CropStageProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
   const [draft, setDraft] = useState<Rect | null>(null);
-  const shown = draft ?? crop;
+  const [focalDraft, setFocalDraft] = useState<Point | null>(null);
+  const focal = focalDraft ?? props.focal;
+  const shown = focalDraft ? props.cropFor(focalDraft) : (draft ?? crop);
 
   // Draw the photo once; the browser scales the canvas to the frame.
   useEffect(() => {
@@ -77,7 +93,21 @@ export function CropStage(props: CropStageProps) {
     // for as long as the pointer stays over the element.
     event.currentTarget.setPointerCapture?.(event.pointerId);
     drag.current = next;
-    setDraft(crop);
+    if (next.kind === 'focal') setFocalDraft(props.focal);
+    else setDraft(crop);
+  }
+
+  function onFocalStart(event: PointerEvent<HTMLButtonElement>) {
+    const box = frameBox();
+    if (!event.isPrimary || event.button !== 0 || drag.current || !box) return;
+    // preventDefault stops the press from focusing the marker, so focus it here.
+    event.currentTarget.focus();
+    begin(event, {
+      kind: 'focal',
+      pointerId: event.pointerId,
+      offsetX: event.clientX - (box.left + props.focal.x * box.width),
+      offsetY: event.clientY - (box.top + props.focal.y * box.height),
+    });
   }
 
   function onMoveStart(event: PointerEvent<HTMLDivElement>) {
@@ -124,6 +154,10 @@ export function CropStage(props: CropStageProps) {
       photo.source,
       { scale: box.width / photo.source.width, x: box.left, y: box.top },
     );
+    if (current.kind === 'focal') {
+      setFocalDraft(pointer);
+      return;
+    }
     setDraft((before) => resizeCrop(before ?? crop, current.corner, pointer, limits));
   }
 
@@ -131,7 +165,12 @@ export function CropStage(props: CropStageProps) {
     if (drag.current?.pointerId !== event.pointerId) return;
     drag.current = null;
     setDraft(null);
-    if (commit && draft && !sameRect(draft, crop)) onCommit(draft);
+    setFocalDraft(null);
+    if (!commit) return;
+    if (draft && !sameRect(draft, crop)) onCommit(draft);
+    if (focalDraft && (focalDraft.x !== props.focal.x || focalDraft.y !== props.focal.y)) {
+      props.onFocalCommit(focalDraft);
+    }
   }
 
   const dragHandlers = {
@@ -209,7 +248,29 @@ export function CropStage(props: CropStageProps) {
             <span aria-hidden="true" className="h-3.5 w-3.5 border-2 border-ink bg-white" />
           </div>
         ))}
-        {props.children}
+        <button
+          type="button"
+          data-testid="focal-marker"
+          aria-label={props.focalLabel}
+          aria-describedby={props.focalDescribedBy}
+          className={`absolute flex cursor-grab touch-none items-center justify-center rounded-full ${focusClass}`}
+          style={{
+            width: HANDLE_TARGET,
+            height: HANDLE_TARGET,
+            left: `calc(${percent(focal.x)} - ${HANDLE_TARGET / 2}px)`,
+            top: `calc(${percent(focal.y)} - ${HANDLE_TARGET / 2}px)`,
+          }}
+          onKeyDown={props.onFocalKeyDown}
+          onPointerDown={onFocalStart}
+          {...dragHandlers}
+        >
+          <span
+            aria-hidden="true"
+            className="flex h-5 w-5 items-center justify-center rounded-full border-2 border-white bg-ink/40 outline-1 outline-ink"
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-white" />
+          </span>
+        </button>
       </div>
     </div>
   );

@@ -15,3 +15,12 @@ export function cropReadout(crop: Rect): string {
     `height, starting ${whole(crop.x)}% from the left and ${whole(crop.y)}% from the top.`
   );
 }
+
+export function focalLabel(fileName: string): string {
+  return `Focal point of ${fileName}. Arrow keys move it. Hold Shift for bigger steps.`;
+}
+
+/** Where the focal point is, in words. */
+export function focalReadout(focal: { x: number; y: number }): string {
+  return `The focal point is ${whole(focal.x)}% from the left and ${whole(focal.y)}% from the top.`;
+}

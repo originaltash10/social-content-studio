@@ -16,7 +16,7 @@ import { hash, makeAsset } from '../test/fixtures';
 import type { Card, ImageEdit, PlacementSpec, Rect, Size } from '../types';
 import { HANDLE_TARGET } from './CropStage';
 import { Editor, HELP_TEXT, LOADING_TEXT } from './Editor';
-import { cropReadout, stageLabel } from './text';
+import { cropReadout, focalLabel, focalReadout, stageLabel } from './text';
 
 // Sizes come from the platform data, never from this file.
 const FEED = getPlacement('instagram', 'feed-vertical') as PlacementSpec;
@@ -89,11 +89,12 @@ afterEach(() => {
 function Host({ missing = false }) {
   const blob = missing ? undefined : BLOB;
   const first = useSessionStore((state) => state.session?.cards[0]);
-  if (!first) return null;
+  const asset = useSessionStore((state) => state.session?.assets[0]);
+  if (!first || !asset) return null;
   return (
     <Editor
       card={first as Card & { edit: ImageEdit }}
-      asset={PHOTO}
+      asset={asset}
       target={TARGET}
       blob={blob}
       loadPhoto={loadPhoto}
@@ -581,5 +582,192 @@ describe('undo in the editor', () => {
     const steps = store().undoStack.length;
     undoKey();
     expect(store().undoStack).toHaveLength(steps);
+  });
+});
+
+describe('the focal point', () => {
+  const SQUARE = getPlacement('linkedin', 'image-square') as PlacementSpec;
+  const SQUARE_TARGET = SQUARE.sizes[0] as Size;
+  const marker = () => screen.getByTestId('focal-marker');
+  const focal = () => store().session?.assets[0]?.focal;
+  const cardAt = (index: number) => store().session?.cards[index] as Card & { edit: ImageEdit };
+  const undo = () => fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+
+  /** Adds a second card for the same photo, on its automatic crop. */
+  function addSquare() {
+    act(() => {
+      store().addCard(draftCard(PHOTO, SQUARE));
+    });
+  }
+
+  it('is a marker that can be reached with Tab, with a focus ring and a label', async () => {
+    await openEditor();
+    expect(marker().tagName).toBe('BUTTON');
+    expect(marker()).not.toHaveAttribute('tabindex', '-1');
+    expect(marker()).toHaveAccessibleName(
+      'Focal point of site.jpg. Arrow keys move it. Hold Shift for bigger steps.',
+    );
+    expect(focalLabel('site.jpg')).toBe(marker().getAttribute('aria-label'));
+    expect(marker()).toHaveAccessibleDescription(focalReadout({ x: 0.5, y: 0.5 }));
+    expect(marker().className).toContain('focus-visible:outline-accent');
+    expect(marker().className).toContain('touch-none');
+    expect(marker().style.width).toBe(`${HANDLE_TARGET}px`);
+    expect(marker().style.height).toBe(`${HANDLE_TARGET}px`);
+    expect(marker().style.left).toBe('calc(50% - 22px)');
+    expect(marker().style.top).toBe('calc(50% - 22px)');
+  });
+
+  it('writes nothing during a drag, and one change on release', async () => {
+    addSquare();
+    await openEditor();
+    const before = snapshot();
+    const capture = vi.fn();
+    (marker() as HTMLElement & { setPointerCapture: unknown }).setPointerCapture = capture;
+    // Grabbed 6 pixels off its centre; the point must not jump by that much.
+    const grab = { clientX: at(0.5, 0.5).clientX + 6, clientY: at(0.5, 0.5).clientY - 6 };
+    fireEvent.pointerDown(marker(), pointer(grab));
+    expect(capture).toHaveBeenCalledWith(1);
+    expect(marker()).toHaveFocus();
+    fireEvent.pointerMove(marker(), pointer(grab));
+    expect(marker().style.left).toBe('calc(50% - 22px)');
+    const to = { clientX: at(0.4, 0.3).clientX + 6, clientY: at(0.4, 0.3).clientY - 6 };
+    fireEvent.pointerMove(marker(), pointer(to));
+    // The marker and the automatic crop follow on screen; the store is untouched.
+    expect(parseFloat(marker().style.left.slice(5))).toBeCloseTo(40, 8);
+    expect(parseFloat(rect().style.left)).toBeCloseTo(10, 8);
+    expectUntouched(before);
+
+    fireEvent.pointerUp(marker(), pointer(to));
+    expect(focal()?.x).toBeCloseTo(0.4, 10);
+    expect(focal()?.y).toBeCloseTo(0.3, 10);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    expect(store().revision).toBe(before.revision + 1);
+    expect(store().dirty).toBe(true);
+    // Both automatic cards were re-centred on the new point, each for its own placement.
+    const moved = focal() as { x: number; y: number };
+    expectCrop(cardAt(0).edit.crop, automaticCrop(SOURCE, TARGET, moved));
+    expectCrop(cardAt(1).edit.crop, automaticCrop(SOURCE, SQUARE_TARGET, moved));
+    expect(cardAt(0).edit.crop.x).toBeCloseTo(0.1, 10);
+  });
+
+  it('leaves a hand-adjusted card alone, and one undo reverses the whole move', async () => {
+    addSquare();
+    await openEditor();
+    // The open card is adjusted by hand; the square card stays automatic.
+    fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    const adjusted = crop();
+    const before = snapshot();
+    const squareBefore = cardAt(1);
+
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.2, 0.5)));
+    // The hand-adjusted crop does not follow the marker.
+    expect(parseFloat(rect().style.left)).toBeCloseTo(21, 8);
+    fireEvent.pointerUp(marker(), pointer(at(0.2, 0.5)));
+
+    expect(focal()?.x).toBeCloseTo(0.2, 10);
+    expect(crop()).toEqual(adjusted);
+    expectCrop(cardAt(1).edit.crop, automaticCrop(SOURCE, SQUARE_TARGET, { x: 0.2, y: 0.5 }));
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+
+    // Reset crop now means the automatic crop for the new point.
+    fireEvent.click(screen.getByRole('button', { name: 'Reset crop' }));
+    expectCrop(crop(), automaticCrop(SOURCE, TARGET, { x: 0.2, y: 0.5 }));
+
+    undo();
+    expect(crop()).toEqual(adjusted);
+    // One press for the focal move: the point and the square card come back together.
+    undo();
+    expect(focal()).toEqual({ x: 0.5, y: 0.5 });
+    expect(cardAt(1)).toEqual(squareBefore);
+    expect(crop()).toEqual(adjusted);
+    expect(store().undoStack).toHaveLength(before.undo);
+    // Then the arrow key from before the move, and then nothing.
+    undo();
+    expectCrop(crop(), AUTO);
+    const steps = store().undoStack.length;
+    undo();
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().session?.cards).toHaveLength(2);
+  });
+
+  it('stops at the edge of the photo', async () => {
+    await openEditor();
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(4, -3)));
+    fireEvent.pointerUp(marker(), pointer(at(4, -3)));
+    expect(focal()).toEqual({ x: 1, y: 0 });
+  });
+
+  it('changes nothing when it is pressed and released in place, or the drag is cancelled', async () => {
+    await openEditor();
+    const before = snapshot();
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerUp(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.2, 0.2)));
+    fireEvent.pointerCancel(marker(), pointer());
+    expect(marker().style.left).toBe('calc(50% - 22px)');
+    expect(rect().style.left).toBe('20%');
+    fireEvent.pointerDown(marker(), pointer({ ...at(0.5, 0.5), button: 2 }));
+    fireEvent.pointerDown(marker(), pointer({ ...at(0.5, 0.5), isPrimary: false }));
+    expectUntouched(before);
+  });
+
+  it('does nothing before the area has a size on screen', async () => {
+    const { frame } = await openEditor();
+    frame.getBoundingClientRect = () => ({ left: 0, top: 0, width: 0, height: 0 }) as DOMRect;
+    const before = snapshot();
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.2, 0.2)));
+    fireEvent.pointerUp(marker(), pointer(at(0.2, 0.2)));
+    expectUntouched(before);
+  });
+
+  it('moves one step for each arrow key press, and each press is one change', async () => {
+    await openEditor();
+    const before = snapshot();
+    fireEvent.keyDown(marker(), { key: 'ArrowLeft' });
+    expect(focal()?.x).toBeCloseTo(0.49, 10);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    // The automatic crop follows the point by the same distance.
+    expect(crop().x).toBeCloseTo(0.19, 10);
+    fireEvent.keyDown(marker(), { key: 'ArrowDown', shiftKey: true });
+    expect(focal()?.y).toBeCloseTo(0.6, 10);
+    expect(store().undoStack).toHaveLength(before.undo + 2);
+    expect(screen.getByText(focalReadout({ x: 0.49, y: 0.6 }))).toBeInTheDocument();
+
+    undo();
+    expect(focal()?.y).toBeCloseTo(0.5, 10);
+    undo();
+    expect(focal()).toEqual({ x: 0.5, y: 0.5 });
+    expectCrop(crop(), AUTO);
+  });
+
+  it('keeps its keys to itself: they never also move or resize the crop', async () => {
+    await openEditor();
+    // Adjust the crop by hand first, so a focal move cannot be what changes it.
+    fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    const adjusted = crop();
+    fireEvent.keyDown(marker(), { key: 'ArrowRight' });
+    fireEvent.keyDown(marker(), { key: '-' });
+    fireEvent.keyDown(marker(), { key: '+', shiftKey: true });
+    expect(crop()).toEqual(adjusted);
+    expect(focal()?.x).toBeCloseTo(0.51, 10);
+  });
+
+  it('writes nothing at the edge of the photo, for other keys, or with Ctrl, Cmd or Alt', async () => {
+    await openEditor();
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(1, 1)));
+    fireEvent.pointerUp(marker(), pointer(at(1, 1)));
+    const before = snapshot();
+    fireEvent.keyDown(marker(), { key: 'ArrowRight' });
+    fireEvent.keyDown(marker(), { key: 'ArrowDown', shiftKey: true });
+    fireEvent.keyDown(marker(), { key: 'Enter' });
+    fireEvent.keyDown(marker(), { key: 'ArrowLeft', ctrlKey: true });
+    fireEvent.keyDown(marker(), { key: 'ArrowLeft', metaKey: true });
+    fireEvent.keyDown(marker(), { key: 'ArrowLeft', altKey: true });
+    expectUntouched(before);
   });
 });

@@ -172,6 +172,28 @@ describe('session.json', () => {
     expect(() => parseSession(text)).toThrow(message);
   });
 
+  it('moves a focal point outside the photo to its edge, on load and on save', () => {
+    const outside = tamper(serializeSession(makeSession()), (r) => {
+      item(r.assets, 0).focal = { x: 3, y: -0.5 };
+      item(r.assets, 1).focal = { x: 1, y: 0 };
+    });
+    const loaded = parseSession(outside);
+    expect(loaded.assets[0]?.focal).toEqual({ x: 1, y: 0 });
+    // A point on the edge is inside the range and is left as it is.
+    expect(loaded.assets[1]?.focal).toEqual({ x: 1, y: 0 });
+    const saved = serializeSession(
+      makeSession({ assets: [makeAsset({ focal: { x: -2, y: 1.5 } })] }),
+    );
+    expect((JSON.parse(saved) as Session).assets[0]?.focal).toEqual({ x: 0, y: 1 });
+  });
+
+  it('still rejects a focal point that is not a number', () => {
+    const text = tamper(serializeSession(makeSession()), (r) => {
+      item(r.assets, 0).focal = { x: 'left', y: 0.5 };
+    });
+    expect(() => parseSession(text)).toThrow('session.assets[0].focal.x must be a finite number');
+  });
+
   it('refuses to write a session whose shape is wrong', () => {
     const broken = { ...makeSession(), version: 2 } as unknown as Session;
     expect(() => serializeSession(broken)).toThrow('session.version must be one of 1');

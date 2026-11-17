@@ -4,8 +4,9 @@
  * src/store/persistence.ts and src/lib/session/.
  *
  * Rules from SPEC.md that this file enforces:
- * - Assets are immutable once imported. There is no action that edits an asset, and importing
- *   an id that is already present leaves the existing asset untouched.
+ * - Assets are immutable once imported: the file and what was read from it never change, and
+ *   importing an id that is already present leaves the existing asset untouched. The one thing
+ *   that can be set afterwards is the focal point (`setAssetFocal`).
  * - "Duplicating a card copies edit and copy, sets parentId, and increments version."
  * - "every store mutation pushes a snapshot of the affected card ... Fifty levels is enough."
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
@@ -20,7 +21,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { emptyBrand } from '../lib/session/layout';
 import type { LoadedSession } from '../lib/session/layout';
-import type { Asset, BrandKit, Brief, Card, Session, ValidationResult } from '../types';
+import type { Asset, BrandKit, Brief, Card, Rect, Session, ValidationResult } from '../types';
 
 export { emptyBrand };
 export type { LoadedSession };
@@ -35,8 +36,14 @@ export type NewCard = Omit<Card, 'id' | 'version' | 'parentId'>;
 
 export type Status = { kind: 'info' | 'warning' | 'error'; message: string };
 
-/** `before` is the card as it was, or null when the card did not exist (undo removes it). */
-type UndoEntry = { cardId: string; before: Card | null };
+/** A new crop for one card, applied together with a focal point move. */
+export type CardCrop = { cardId: string; crop: Rect };
+
+type UndoEntry =
+  /** `before` is the card as it was, or null when the card did not exist (undo removes it). */
+  | { cardId: string; before: Card | null }
+  /** A focal point move: the point as it was, and every card it re-cropped as it was. */
+  | { assetId: string; focalBefore: Asset['focal']; cardsBefore: Card[] };
 
 type SessionData = {
   session: Session | null;
@@ -67,6 +74,13 @@ type SessionActions = {
    * changed. Returns false if there is no such card.
    */
   setValidation: (id: string, result: ValidationResult) => boolean;
+  /**
+   * Moves a photo's focal point and gives the listed cards their new crops, as one change and
+   * one undo step. The point is kept inside 0..1. A crop is applied only to a single-photo
+   * card of this photo. Returns false if there is no such asset; a call that would change
+   * nothing is not a change and adds no undo step.
+   */
+  setAssetFocal: (assetId: string, focal: Asset['focal'], crops?: CardCrop[]) => boolean;
   /** Duplicates a card as a linked variant and returns the new id, or null if not found. */
   duplicateCard: (id: string) => string | null;
   /** Reverts the most recent card change. Returns false when there is nothing to undo. */
@@ -137,6 +151,9 @@ export function sameValue(a: unknown, b: unknown): boolean {
       sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
   );
 }
+
+/** A fraction kept inside 0..1; anything that is not a number becomes the middle. */
+const unit = (value: number) => (Number.isFinite(value) ? Math.min(1, Math.max(0, value)) : 0.5);
 
 function pushUndo(state: SessionData, entry: UndoEntry) {
   state.undoStack.push(entry);
@@ -229,6 +246,34 @@ export const useSessionStore = create<SessionState>()(
         return true;
       },
 
+      setAssetFocal: (assetId, focal, crops = []) => {
+        const session = get().session;
+        const asset = session?.assets.find((a) => a.id === assetId);
+        if (!session || !asset) return false;
+        const next = { x: unit(focal.x), y: unit(focal.y) };
+        const wanted = new Map(crops.map(({ cardId, crop }) => [cardId, crop]));
+        const cardsBefore = session.cards.filter(
+          (c) =>
+            wanted.has(c.id) &&
+            c.assetIds.length === 1 &&
+            c.assetIds[0] === assetId &&
+            'format' in c.edit,
+        );
+        if (sameValue(asset.focal, next) && cardsBefore.length === 0) return true;
+        // Compared by id: inside the change the cards are drafts, not these objects.
+        const recropped = new Set(cardsBefore.map((c) => c.id));
+        mutate((open, state) => {
+          open.assets = open.assets.map((a) => (a.id === assetId ? { ...a, focal: next } : a));
+          open.cards = open.cards.map((c) =>
+            recropped.has(c.id)
+              ? { ...c, edit: { ...c.edit, crop: structuredClone(wanted.get(c.id) as Rect) } }
+              : c,
+          );
+          pushUndo(state, { assetId, focalBefore: asset.focal, cardsBefore });
+        });
+        return true;
+      },
+
       duplicateCard: (id) => {
         const source = get().session?.cards.find((c) => c.id === id);
         if (!source) return null;
@@ -257,13 +302,21 @@ export const useSessionStore = create<SessionState>()(
       undo: () => {
         const entry = get().undoStack.at(-1);
         if (!entry) return false;
-        const { cardId, before } = entry;
         mutate((session, state) => {
           state.undoStack.pop();
-          session.cards =
-            before === null
-              ? session.cards.filter((c) => c.id !== cardId)
-              : session.cards.map((c) => (c.id === cardId ? before : c));
+          if ('assetId' in entry) {
+            const before = new Map(entry.cardsBefore.map((c) => [c.id, c]));
+            session.assets = session.assets.map((a) =>
+              a.id === entry.assetId ? { ...a, focal: entry.focalBefore } : a,
+            );
+            session.cards = session.cards.map((c) => before.get(c.id) ?? c);
+          } else {
+            const { cardId, before } = entry;
+            session.cards =
+              before === null
+                ? session.cards.filter((c) => c.id !== cardId)
+                : session.cards.map((c) => (c.id === cardId ? before : c));
+          }
         });
         return true;
       },
