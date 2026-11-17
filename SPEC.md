@@ -262,7 +262,7 @@ type CarouselEdit = { slides: { assetId: string; edit: ImageEdit }[]; coverIndex
 type Provenance = { provider: string; model: string; at: string };
 ```
 
-Rules: assets are immutable once imported; every change happens on a card. Duplicating a card copies `edit` and `copy`, sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit` and `copy`, sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
 
 Brand kit (`brand.json`): logos as PNG paths, fonts as uploaded files or Google Fonts names, a color palette, a voice document (plain text, under 500 words), and overlay presets. It is exportable on its own so the marketing team can share one file with the office.
 
