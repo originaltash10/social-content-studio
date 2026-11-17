@@ -55,6 +55,9 @@ npm test        # run the tests
 npm run build   # build the app into dist/
 ```
 
+To check the board in a real Chrome browser, run `node e2e/board.check.mjs` (it needs Playwright
+with Chromium installed, and prints a pass or fail line for each check).
+
 ## License
 
 All rights reserved. No license is granted to use, copy or modify this code.
