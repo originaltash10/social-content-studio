@@ -33,6 +33,8 @@ export default defineConfig({
         // The board: card creation, grouping and filters, version labels, and the render
         // controller that keeps each card's file and validation result up to date.
         'src/lib/board/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        // The editor's geometry: crop limits, moving and resizing, screen-to-photo mapping.
+        'src/lib/editor/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/store/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
