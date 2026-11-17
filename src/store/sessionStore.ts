@@ -9,6 +9,8 @@
  * - "Duplicating a card copies edit and copy, sets parentId, and increments version."
  * - "every store mutation pushes a snapshot of the affected card ... Fifty levels is enough."
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
+ * - A card's validation result is the validator's output, not an edit, so recording it is not
+ *   an undo step, and recording the same result again is not a change.
  *
  * API keys are not part of this store. They live in IndexedDB only (Settings, Phase 2).
  */
@@ -18,7 +20,7 @@ import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import { emptyBrand } from '../lib/session/layout';
 import type { LoadedSession } from '../lib/session/layout';
-import type { Asset, BrandKit, Brief, Card, Session } from '../types';
+import type { Asset, BrandKit, Brief, Card, Session, ValidationResult } from '../types';
 
 export { emptyBrand };
 export type { LoadedSession };
@@ -59,6 +61,12 @@ type SessionActions = {
   addCard: (card: NewCard) => string;
   /** Changes a card through an Immer recipe. Returns false if there is no such card. */
   updateCard: (id: string, change: (card: Card) => void) => boolean;
+  /**
+   * Records the validator's result for a card. It is not an undo step, and a result equal in
+   * value to the one the card already has changes nothing, so it does not mark the session as
+   * changed. Returns false if there is no such card.
+   */
+  setValidation: (id: string, result: ValidationResult) => boolean;
   /** Duplicates a card as a linked variant and returns the new id, or null if not found. */
   duplicateCard: (id: string) => string | null;
   /** Reverts the most recent card change. Returns false when there is nothing to undo. */
@@ -110,6 +118,24 @@ function blank(): Omit<SessionData, 'revision'> {
     status: null,
     undoStack: [],
   };
+}
+
+/**
+ * True when two plain data values are equal: same primitives, same array items in the same
+ * order, and objects with the same keys and equal values. Key order does not matter.
+ */
+export function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false;
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every(
+    (key) =>
+      Object.hasOwn(b, key) &&
+      sameValue((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]),
+  );
 }
 
 function pushUndo(state: SessionData, entry: UndoEntry) {
@@ -188,6 +214,17 @@ export const useSessionStore = create<SessionState>()(
         mutate((session, state) => {
           session.cards = session.cards.map((c) => (c.id === id ? after : c));
           pushUndo(state, { cardId: id, before });
+        });
+        return true;
+      },
+
+      setValidation: (id, result) => {
+        const card = get().session?.cards.find((c) => c.id === id);
+        if (!card) return false;
+        if (sameValue(card.validation, result)) return true;
+        const validation = structuredClone(result);
+        mutate((session) => {
+          session.cards = session.cards.map((c) => (c.id === id ? { ...c, validation } : c));
         });
         return true;
       },

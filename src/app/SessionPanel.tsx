@@ -1,11 +1,10 @@
 /**
- * Plain controls for creating, saving, loading and clearing a session, so the session store can
- * be tested by hand. Lightly styled with the theme tokens from index.css; the real UI comes later.
+ * Controls for creating, saving, loading and clearing a session, the session's save state, and
+ * Ctrl/Cmd-Z to undo the last card change. Cards are made and changed on the board.
  */
 
 import { useEffect, useRef, useState } from 'react';
 import { supportsFolders } from '../lib/session/fsAccess';
-import { platforms } from '../lib/platforms';
 import {
   currentFolderName,
   downloadBundle,
@@ -18,37 +17,11 @@ import {
   startAutosave,
 } from '../store/persistence';
 import { useSessionStore } from '../store/sessionStore';
-import type { NewCard } from '../store/sessionStore';
 import { buttonClass, focusClass, primaryButtonClass } from './styles';
 
 const DISCARD_PROMPT = 'The open session has unsaved changes. Discard them and continue?';
 const CLEAR_PROMPT =
   'Clear this session? It will be removed from the app. Nothing on disk will be deleted.';
-
-/**
- * A placeholder card so save, autosave and undo can be exercised before the import panel and
- * the board exist. The placement comes from platforms.json; nothing about it is validated.
- */
-function sampleCard(): NewCard | null {
-  const spec = platforms.placements[0];
-  if (!spec) return null;
-  return {
-    assetIds: [],
-    platform: spec.platform,
-    placement: spec.placement,
-    status: 'draft',
-    edit: {
-      crop: { x: 0, y: 0, width: 1, height: 1 },
-      overlays: [],
-      format: 'jpg',
-      quality: 0.9,
-    },
-    copy: { caption: 'Sample caption', firstComment: '', hashtags: [], altText: '' },
-    validation: { level: 'pass', issues: [] },
-    overrideFail: false,
-    comments: [],
-  };
-}
 
 /** True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead. */
 function isTyping(target: EventTarget | null): boolean {
@@ -65,7 +38,6 @@ export function SessionPanel() {
   const lastSavedAt = useSessionStore((state) => state.lastSavedAt);
   const status = useSessionStore((state) => state.status);
   const missingAssetIds = useSessionStore((state) => state.missingAssetIds);
-  const undoDepth = useSessionStore((state) => state.undoStack.length);
   const [name, setName] = useState('Untitled session');
   const fileInput = useRef<HTMLInputElement>(null);
 
@@ -110,11 +82,6 @@ export function SessionPanel() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (file) void loadBundle(file, file.name);
-  }
-
-  function onAddSampleCard() {
-    const card = sampleCard();
-    if (card) useSessionStore.getState().addCard(card);
   }
 
   const missingNames = session
@@ -199,20 +166,6 @@ export function SessionPanel() {
           Chrome or Edge.
         </p>
       )}
-
-      <div className="flex flex-wrap gap-2">
-        <button type="button" className={buttonClass} onClick={onAddSampleCard} disabled={!session}>
-          Add sample card (for testing)
-        </button>
-        <button
-          type="button"
-          className={buttonClass}
-          onClick={() => useSessionStore.getState().undo()}
-          disabled={undoDepth === 0}
-        >
-          Undo ({undoDepth})
-        </button>
-      </div>
 
       {session ? (
         <dl className="grid grid-cols-[max-content_1fr] items-baseline gap-x-4 gap-y-1">

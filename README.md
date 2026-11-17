@@ -8,26 +8,31 @@ Live app: <https://originaltash10.github.io/social-content-studio> (available on
 
 ## Status: early development
 
-The app is not yet usable for making posts. What works today:
+The app can now turn a photo into correctly sized images for Instagram and LinkedIn, but it is
+not finished: there is no way yet to save those images as files, and no editor. What works today:
 
-- **Sessions.** Create a session, save it, load it again, and clear it. Changes save
-  automatically once a session has a folder. The Undo button, or Ctrl/Cmd-Z, reverses the last
-  change to a card, up to 50 steps back. For now the only card action on screen is adding a
-  sample card.
+- **Sessions.** Create a session, save it, and open it again later. Changes save automatically
+  once a session has a folder. Ctrl/Cmd-Z reverses the last change to a card, up to 50 steps
+  back. Clearing a session removes it from the app; nothing on disk is deleted.
 - **Importing photos.** With a session open, drop JPG, PNG or HEIC photos onto the import panel,
   or use Choose files. Each photo is shown as a small preview with its name and size, and is
   saved with the session, unchanged. A photo that is already in the session is not added twice.
   Files are recognised by their contents, not their names. Video (MP4, MOV) is not imported yet,
   and other file types need converting to JPG or PNG first; the panel says so for each file.
+- **The board.** Choose Create cards, pick photos and Instagram or LinkedIn placements (for
+  example Instagram Feed vertical or LinkedIn Image post square), and the board makes one card
+  for each. Each card's image is cropped around the middle of the photo and resized to the
+  placement's exact size, with a progress bar while it is made and a Cancel button. Every card
+  is then checked against the platform's rules and shows Pass, Warning or Fail. You can filter
+  the board by platform and by result, open a card to see its image larger with every check in
+  full, duplicate a card, and render a card again. The images are made in your browser and are
+  kept only while the page is open; a reopened session makes them again.
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
-  one data file (`src/data/platforms.json`), and the checker that compares a post against them is
-  written and tested. It is not yet connected to anything on screen.
-- **Image resizing.** The engine that crops a photo around its focal point and resizes it to a
-  placement's size, as JPG or PNG, is built and tested. Nothing on screen uses it yet; it will be
-  usable from the board of posts in a later step.
+  one data file (`src/data/platforms.json`), which the board and its checks read.
 
-The screen is a plain test panel for sessions and importing. Still planned and not built yet:
-importing video, captions, the board of posts, the editor for adjusting a crop, and export.
+For now every card shows a Warning, because alt text (a description of the image for people
+using screen readers) cannot be written yet. Still to come: saving the images as files
+(export), the editor for adjusting a crop, captions and alt text, carousels, and video.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy
@@ -54,6 +59,9 @@ npm run dev     # start the app, then open the address it prints
 npm test        # run the tests
 npm run build   # build the app into dist/
 ```
+
+To check the board in a real Chrome browser, run `node e2e/board.check.mjs` (it needs Playwright
+with Chromium installed, and prints a pass or fail line for each check).
 
 ## License
 
