@@ -208,7 +208,9 @@ describe('the crop area', () => {
     await openEditor();
     expect(stage()).toHaveAttribute('tabindex', '0');
     expect(stage()).toHaveAccessibleName(stageLabel('site.jpg'));
-    expect(stageLabel('site.jpg')).toMatch(/Arrow keys move the crop.*Shift/);
+    expect(stageLabel('site.jpg')).toBe(
+      'Crop of site.jpg. Arrow keys move the crop. Plus and minus resize it. Hold Shift for bigger steps.',
+    );
     expect(stage().className).toContain('focus-visible:outline-accent');
     expect(stage()).toHaveAccessibleDescription(cropReadout(AUTO));
   });
@@ -409,6 +411,63 @@ describe('arrow keys', () => {
     const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     stage().dispatchEvent(escape);
     expect(escape.defaultPrevented).toBe(false);
+  });
+});
+
+describe('plus and minus', () => {
+  it('resize the crop about its centre, one change for each press', async () => {
+    await openEditor();
+    const before = snapshot();
+    fireEvent.keyDown(stage(), { key: '-' });
+    // 1% of the photo's width narrower, the same centre, the same shape.
+    expectCrop(crop(), {
+      x: 0.205,
+      y: (1 - 0.59 * LIMITS.shape) / 2,
+      width: 0.59,
+      height: 0.59 * LIMITS.shape,
+    });
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    fireEvent.keyDown(stage(), { key: '_', shiftKey: true });
+    expectCrop(crop(), {
+      x: 0.255,
+      y: (1 - 0.49 * LIMITS.shape) / 2,
+      width: 0.49,
+      height: 0.49 * LIMITS.shape,
+    });
+    expect(store().undoStack).toHaveLength(before.undo + 2);
+    fireEvent.keyDown(stage(), { key: '=' });
+    expect(crop().width).toBeCloseTo(0.5, 10);
+    fireEvent.keyDown(stage(), { key: 'Add' });
+    expect(crop().width).toBeCloseTo(0.51, 10);
+    fireEvent.keyDown(stage(), { key: '+', shiftKey: true });
+    // Back at the largest crop, which is the automatic one.
+    expectCrop(crop(), AUTO);
+    expect(store().undoStack).toHaveLength(before.undo + 5);
+    const ratio = (crop().width * SOURCE.width) / (crop().height * SOURCE.height);
+    expect(ratio).toBeCloseTo(TARGET.width / TARGET.height, 10);
+  });
+
+  it('write nothing at the largest or the smallest size', async () => {
+    await openEditor();
+    const before = snapshot();
+    fireEvent.keyDown(stage(), { key: '+' });
+    fireEvent.keyDown(stage(), { key: '=', shiftKey: true });
+    expectUntouched(before);
+    for (let press = 0; press < 6; press++) {
+      fireEvent.keyDown(stage(), { key: 'Subtract', shiftKey: true });
+    }
+    expect(crop().width).toBeCloseTo(LIMITS.min.width, 10);
+    const atSmallest = snapshot();
+    fireEvent.keyDown(stage(), { key: '-' });
+    expectUntouched(atSmallest);
+  });
+
+  it('undo one press at a time', async () => {
+    await openEditor();
+    fireEvent.keyDown(stage(), { key: '-' });
+    fireEvent.keyDown(stage(), { key: '-' });
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    expect(crop().width).toBeCloseTo(0.59, 10);
   });
 });
 

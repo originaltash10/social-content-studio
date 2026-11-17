@@ -3,7 +3,7 @@
 import type { Rect } from '../types';
 
 export function stageLabel(fileName: string): string {
-  return `Crop of ${fileName}. Arrow keys move the crop. Hold Shift for bigger steps.`;
+  return `Crop of ${fileName}. Arrow keys move the crop. Plus and minus resize it. Hold Shift for bigger steps.`;
 }
 
 const whole = (fraction: number) => Math.round(fraction * 100);

@@ -7,10 +7,12 @@
 import type { ReactNode } from 'react';
 
 import type { CardRender } from '../lib/board/controller';
+import { progressLabel, progressPercent } from '../lib/board/controller';
 import type { VersionInfo } from '../lib/board/versions';
 import { versionDescription } from '../lib/board/versions';
 import {
   RESULT_LABEL,
+  isPending,
   previewAlt,
   renderedFileLabel,
   resultOf,
@@ -100,6 +102,43 @@ export function CardDetails({
               </ul>
             )}
           </section>
+
+          {editor !== undefined && (
+            <section aria-label="Rendered file" className="flex flex-col gap-2">
+              <h3 className="font-heading font-semibold">Rendered file</h3>
+              {done ? (
+                <img
+                  src={done.url}
+                  alt={previewAlt(card, fileName, name)}
+                  className="max-h-48 self-start rounded-control bg-page object-contain"
+                />
+              ) : isPending(render) ? (
+                <div className="flex flex-col gap-1">
+                  <div
+                    role="progressbar"
+                    aria-label={`Rendering ${name}`}
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={progressPercent(render)}
+                    aria-valuetext={progressLabel(render)}
+                    className="h-2 overflow-hidden rounded-control bg-page"
+                  >
+                    <div
+                      className="h-full bg-accent transition-[width]"
+                      style={{ width: `${progressPercent(render)}%` }}
+                    />
+                  </div>
+                  <p className="text-label text-muted-text">{progressLabel(render)}</p>
+                </div>
+              ) : (
+                <p className="text-ink-secondary">
+                  {render?.kind === 'cancelled'
+                    ? 'Cancelled before the file was made.'
+                    : 'No preview yet.'}
+                </p>
+              )}
+            </section>
+          )}
         </div>
       </div>
     </div>

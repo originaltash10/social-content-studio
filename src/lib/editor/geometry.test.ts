@@ -17,6 +17,8 @@ import {
   movePoint,
   rectToScreen,
   resizeCrop,
+  resizeDelta,
+  scaleCrop,
   toPhoto,
   toScreen,
 } from './geometry';
@@ -156,6 +158,56 @@ describe('resizeCrop', () => {
     expect(next.x + next.width).toBeLessThanOrEqual(1 + 1e-12);
     expect(next.y + next.height).toBeLessThanOrEqual(1 + 1e-12);
     expect(next.width).toBeLessThan(limits.min.width);
+  });
+});
+
+describe('scaleCrop', () => {
+  const limits = cropLimits(PHOTO, SQUARE);
+  const crop: Rect = { x: 0.3, y: 0.2, width: 0.3, height: 0.4 };
+
+  it('grows and shrinks about the centre and keeps the shape', () => {
+    const bigger = scaleCrop(crop, 0.06, limits);
+    expectRect(bigger, { x: 0.27, y: 0.16, width: 0.36, height: 0.48 });
+    expect(pixelRatio(bigger, PHOTO)).toBeCloseTo(1, 12);
+    const smaller = scaleCrop(crop, -0.06, limits);
+    expectRect(smaller, { x: 0.33, y: 0.24, width: 0.24, height: 0.32 });
+    expect(smaller.x + smaller.width / 2).toBeCloseTo(0.45, 12);
+    expect(smaller.y + smaller.height / 2).toBeCloseTo(0.4, 12);
+  });
+
+  it('stops at the smallest and the largest size', () => {
+    const smallest = scaleCrop(crop, -1, limits);
+    expect(smallest.width).toBeCloseTo(limits.min.width, 12);
+    expect(smallest.height).toBeCloseTo(limits.min.height, 12);
+    // The largest crop is the photo's full height; it slides sideways to keep its centre.
+    const largest = scaleCrop(crop, 1, limits);
+    expectRect(largest, { x: 0.075, y: 0, width: 0.75, height: 1 });
+    // At a limit already, the very same crop comes back.
+    expect(scaleCrop(smallest, -0.01, limits)).toBe(smallest);
+    expect(scaleCrop(largest, 0.01, limits)).toBe(largest);
+  });
+
+  it('slides back inside the photo when it would hang over an edge', () => {
+    const topLeft = scaleCrop({ x: 0, y: 0, width: 0.3, height: 0.4 }, 0.06, limits);
+    expectRect(topLeft, { x: 0, y: 0, width: 0.36, height: 0.48 });
+    const bottomRight = scaleCrop({ x: 0.7, y: 0.6, width: 0.3, height: 0.4 }, 0.06, limits);
+    expectRect(bottomRight, { x: 0.64, y: 0.52, width: 0.36, height: 0.48 });
+  });
+});
+
+describe('resizeDelta', () => {
+  it('grows for plus and equals, and shrinks for minus, on either part of the keyboard', () => {
+    for (const key of ['+', '=', 'Add']) expect(resizeDelta(key, false)).toBe(NUDGE_STEP);
+    for (const key of ['-', '_', 'Subtract']) expect(resizeDelta(key, false)).toBe(-NUDGE_STEP);
+  });
+
+  it('takes a bigger step with Shift', () => {
+    expect(resizeDelta('+', true)).toBe(NUDGE_BIG_STEP);
+    expect(resizeDelta('_', true)).toBe(-NUDGE_BIG_STEP);
+  });
+
+  it('is null for any other key', () => {
+    expect(resizeDelta('ArrowUp', false)).toBeNull();
   });
 });
 

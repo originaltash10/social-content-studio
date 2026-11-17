@@ -111,6 +111,25 @@ export function constrainCrop(crop: Rect, source: Size, target: Size): Rect {
   };
 }
 
+/**
+ * The crop made wider by `delta` (a fraction of the photo's width; negative to shrink), about
+ * its centre, with its shape kept. It stops at the size limits. A crop that would hang over an
+ * edge of the photo is slid back inside, so a crop touching an edge can still grow. A crop that
+ * is already at the limit is returned as it is.
+ */
+export function scaleCrop(crop: Rect, delta: number, limits: CropLimits): Rect {
+  const width = clamp(crop.width + delta, limits.min.width, limits.max.width);
+  // Already at the limit: the very same crop, so rounding cannot make it look changed.
+  if (width === crop.width) return crop;
+  const height = width * limits.shape;
+  return {
+    x: clamp(crop.x + crop.width / 2 - width / 2, 0, 1 - width),
+    y: clamp(crop.y + crop.height / 2 - height / 2, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
 /** The crop a card gets when nobody has adjusted it: see `focalCrop`. */
 export function automaticCrop(source: Size, target: Size, focal: Point): Rect {
   return focalCrop(source, target.width / target.height, focal);
@@ -161,6 +180,18 @@ export function arrowDelta(key: string, big: boolean): { dx: number; dy: number 
     default:
       return null;
   }
+}
+
+/**
+ * How much a key resizes the crop, as a change in its width in fractions of the photo: plus
+ * (or the equals key it shares) grows it and minus shrinks it, by NUDGE_STEP, or NUDGE_BIG_STEP
+ * with Shift. The number pad's keys count too. Null for any other key.
+ */
+export function resizeDelta(key: string, big: boolean): number | null {
+  const step = big ? NUDGE_BIG_STEP : NUDGE_STEP;
+  if (key === '+' || key === '=' || key === 'Add') return step;
+  if (key === '-' || key === '_' || key === 'Subtract') return -step;
+  return null;
 }
 
 // ---------------------------------------------------------------------------

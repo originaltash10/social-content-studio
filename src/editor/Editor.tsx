@@ -5,7 +5,7 @@
  * What it writes, and when. Opening the editor writes nothing: a stored crop that is smaller
  * than the editor allows is enlarged for display only. The card is changed with one
  * `updateCard` when a drag is released with a different crop, when an arrow key moves the
- * crop, and when Reset crop is pressed. Each of those is one undo step and marks the session as
+ * crop or plus or minus resizes it, and when Reset crop is pressed. Each of those is one undo step and marks the session as
  * changed, so autosave picks it up. The board then renders and checks the card again.
  *
  * Undo. While the editor is open, Ctrl/Cmd-Z belongs to it: it undoes only the changes made
@@ -23,6 +23,8 @@ import {
   cropLimits,
   isAutomaticCrop,
   moveCrop,
+  resizeDelta,
+  scaleCrop,
 } from '../lib/editor/geometry';
 import { UNDO_LIMIT, useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, ImageEdit, Rect, Size } from '../types';
@@ -47,7 +49,7 @@ export type EditorProps = {
 export const LOADING_TEXT = 'Opening the photo so you can adjust the crop…';
 export const HELP_TEXT =
   'Drag the crop to move it, or drag a corner to resize it. With the crop area selected, the ' +
-  'arrow keys move it; hold Shift for bigger steps.';
+  'arrow keys move it, and plus and minus resize it; hold Shift for bigger steps.';
 
 /** True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead. */
 function isTyping(target: EventTarget | null): boolean {
@@ -105,12 +107,15 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
 
   function onStageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.ctrlKey || event.metaKey || event.altKey) return;
-    const delta = arrowDelta(event.key, event.shiftKey);
-    if (!delta) return;
+    const move = arrowDelta(event.key, event.shiftKey);
+    const resize = resizeDelta(event.key, event.shiftKey);
+    if (!move && resize === null) return;
     event.preventDefault();
-    const next = moveCrop(shown, delta.dx, delta.dy);
-    // At the edge of the photo there is nowhere to go, so there is nothing to write.
-    if (next.x !== shown.x || next.y !== shown.y) write(next);
+    const next = move
+      ? moveCrop(shown, move.dx, move.dy)
+      : scaleCrop(shown, resize as number, limits);
+    // At the edge of the photo or at a size limit nothing changes, so nothing is written.
+    if (next.x !== shown.x || next.y !== shown.y || next.width !== shown.width) write(next);
   }
 
   if (state.kind === 'loading') {

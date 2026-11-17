@@ -570,13 +570,51 @@ describe('the details dialog', () => {
     await showPhoto();
     expect(within(dialog).getByRole('application')).toHaveAccessibleName(/^Crop of site\.jpg/);
     expect(within(dialog).getByRole('button', { name: 'Reset crop' })).toBeInTheDocument();
-    // The rendered preview has given way to the editor; the details and checks are still there.
-    expect(within(dialog).queryByRole('img')).toBeNull();
+    // The details and checks are still there, with a small preview of the rendered file.
     const size = sizeOf(FEED);
     expect(dialog).toHaveTextContent(`${size.width} × ${size.height} JPG · 400 KB`);
     expect(within(dialog).getByRole('region', { name: 'Checks' })).toHaveTextContent(
       'Alt text is missing.',
     );
+  });
+
+  it('keeps a preview of the rendered file, which follows each new render', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const file = () => within(dialog).getByRole('region', { name: 'Rendered file' });
+    const first = within(file()).getByRole('img');
+    expect(first).toHaveAttribute('src', 'blob:render-1');
+    expect(first).toHaveAttribute('alt', 'Preview of site.jpg for Instagram Feed vertical');
+
+    // A change in the editor starts a new render: progress shows until its file is ready.
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    await sent(2);
+    expect(within(file()).queryByRole('img')).toBeNull();
+    expect(file()).toHaveTextContent('Waiting to render');
+    act(() => client.calls[1]?.onProgress('drawing'));
+    const bar = within(file()).getByRole('progressbar', {
+      name: 'Rendering Instagram Feed vertical',
+    });
+    expect(bar).toHaveAttribute('aria-valuenow', '60');
+    expect(bar).toHaveAttribute('aria-valuetext', 'Cropping and resizing');
+    answer(1);
+    await idle();
+    expect(within(file()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(within(file()).queryByRole('progressbar')).toBeNull();
+
+    // Cancelled, then failed: no picture, and it says why.
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    await sent(3);
+    act(() => {
+      controller?.cancelAll();
+    });
+    expect(file()).toHaveTextContent('Cancelled before the file was made.');
+    act(() => controller?.renderAgain(store().session?.cards[0]?.id as string));
+    await sent(4);
+    act(() => client.calls[3]?.reject(new RenderError('encode', 'Could not be saved as JPG.')));
+    await idle();
+    expect(file()).toHaveTextContent('No preview yet.');
+    expect(dialog).toHaveTextContent('Could not be saved as JPG.');
   });
 
   it('shows why a photo cannot be edited in place of the crop area, and keeps the details', async () => {
