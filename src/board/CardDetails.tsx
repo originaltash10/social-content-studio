@@ -69,7 +69,7 @@ export function CardDetails({
       </dl>
 
       {done?.upscaled && (
-        <p className="text-highlight-text">{upscaledNote(done.width, done.height)}</p>
+        <p className="text-ink-secondary">{upscaledNote(done.width, done.height)}</p>
       )}
       {render?.kind === 'failed' && <p className="text-red-700">{render.message}</p>}
 

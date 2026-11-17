@@ -46,7 +46,7 @@ export function previewAlt(card: Pick<Card, 'copy'>, fileName: string, name: str
 
 /** The note shown when a picture had to be enlarged to fill the placement. */
 export function upscaledNote(width: number, height: number): string {
-  return `Enlarged to fit: this photo is smaller than ${width} × ${height}, so it may look soft.`;
+  return `Note: enlarged to fit. The cropped area is smaller than ${width} × ${height} pixels, so it may look soft.`;
 }
 
 /** A card's result: its validation level once its file is rendered, "unchecked" until then. */

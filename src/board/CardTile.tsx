@@ -12,8 +12,9 @@ import {
   upscaledNote,
 } from '../lib/board/view';
 import type { Card } from '../types';
-import { badgeClass, buttonClass } from '../app/styles';
+import { badgeClass, buttonClass, resultTextClass } from '../app/styles';
 import { ResultBadge } from './ResultBadge';
+import { firstReason } from './reason';
 
 export type CardTileProps = {
   card: Card;
@@ -40,6 +41,8 @@ export function CardTile(props: CardTileProps) {
   const pending = isPending(render);
   const lineage = lineageLabel(version);
   const shape = render?.kind === 'done' ? render : size;
+  // Reasons are shown once the file is checked, like the badge they explain.
+  const reason = render?.kind === 'done' ? firstReason(card.validation) : null;
 
   return (
     <article
@@ -73,15 +76,19 @@ export function CardTile(props: CardTileProps) {
         <ResultBadge result={resultOf(card, render)} />
         <span className={`${badgeClass} text-ink-secondary`}>{versionLabel(version)}</span>
       </div>
+      {reason && (
+        <p className={`text-label ${resultTextClass[reason.level]}`}>
+          {reason.message}
+          {reason.more > 0 && <span className="text-ink-secondary"> +{reason.more} more</span>}
+        </p>
+      )}
       {lineage && <p className="text-label text-muted-text">{lineage}</p>}
 
       {render?.kind === 'done' && (
         <p className="text-label text-ink-secondary">{renderedFileLabel(render)}</p>
       )}
       {render?.kind === 'done' && render.upscaled && (
-        <p className="text-label text-highlight-text">
-          {upscaledNote(render.width, render.height)}
-        </p>
+        <p className="text-label text-ink-secondary">{upscaledNote(render.width, render.height)}</p>
       )}
       {render?.kind === 'failed' && <p className="text-label text-red-700">{render.message}</p>}
       {render?.kind === 'cancelled' && (

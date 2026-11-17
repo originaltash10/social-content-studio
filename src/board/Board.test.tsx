@@ -240,6 +240,7 @@ describe('creating cards', () => {
     expect(feed).toHaveTextContent(`${size.width} × ${size.height} JPG · 400 KB`);
     // No alt text yet, so rule 8 warns.
     expect(within(feed).getByText('Warning')).toBeInTheDocument();
+    expect(within(feed).getByText('Alt text is missing')).toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(status('Render progress')).toHaveTextContent(
       'Rendered 2 cards: 0 pass, 2 with warnings.',
@@ -376,9 +377,38 @@ describe('progress, cancel and failures', () => {
     answer(0, { upscaled: true });
     await idle();
     const size = sizeOf(FEED);
-    expect(article(/Feed vertical/)).toHaveTextContent(
-      `Enlarged to fit: this photo is smaller than ${size.width} × ${size.height}, so it may look soft.`,
+    const note = within(article(/Feed vertical/)).getByText(
+      `Note: enlarged to fit. The cropped area is smaller than ${size.width} × ${size.height} pixels, so it may look soft.`,
     );
+    // Neutral text, so it does not read as the reason for the Warning badge.
+    expect(note).toHaveClass('text-ink-secondary');
+    expect(note).not.toHaveClass('text-highlight-text');
+  });
+
+  it('shows the first reason for a result on the card, and how many more there are', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    // Nothing is shown until the file has been checked.
+    expect(article(/Feed vertical/)).not.toHaveTextContent('Alt text is missing');
+    await sent(1);
+    answer(0);
+    await idle();
+    const reason = within(article(/Feed vertical/)).getByText('Alt text is missing');
+    expect(reason).toHaveClass('text-highlight-text');
+    expect(reason).not.toHaveTextContent('more');
+
+    // A link in an Instagram caption adds a second warning.
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        card.copy.caption = 'See https://example.com';
+      });
+    });
+    await idle();
+    const card = article(/Feed vertical/);
+    expect(card.querySelectorAll('p.text-highlight-text')).toHaveLength(1);
+    expect(card).toHaveTextContent(/\+1 more/);
   });
 
   it('says so for a card whose placement or photo is not available', () => {
@@ -516,7 +546,8 @@ describe('the details dialog', () => {
     answer(0, { upscaled: true });
     await idle();
     fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Enlarged to fit');
+    const note = within(screen.getByRole('dialog')).getByText(/^Note: enlarged to fit\./);
+    expect(note).toHaveClass('text-ink-secondary');
   });
 
   it('closes when undo removes its card, and moves focus to the board heading', async () => {
