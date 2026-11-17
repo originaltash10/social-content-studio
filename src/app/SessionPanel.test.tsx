@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { supportsFolders } from '../lib/session/fsAccess';
-import { platforms } from '../lib/platforms';
 import * as persistence from '../store/persistence';
 import { useSessionStore } from '../store/sessionStore';
 import { hash, makeBrand, makeSession } from '../test/fixtures';
@@ -71,8 +70,8 @@ describe('with no session open', () => {
     expect(button('Save')).toBeDisabled();
     expect(button('Download .scs')).toBeDisabled();
     expect(button('Clear session')).toBeDisabled();
-    expect(button(/Add sample card/)).toBeDisabled();
-    expect(button(/Undo/)).toBeDisabled();
+    // The test-only sample card and Undo buttons are gone; cards are made on the board.
+    expect(screen.queryByRole('button', { name: /sample card|Undo/ })).toBeNull();
     expect(button('New session')).toBeEnabled();
     expect(button('Open folder')).toBeEnabled();
     expect(button('Reopen last')).toBeEnabled();
@@ -137,26 +136,6 @@ describe('with a session open', () => {
     fireEvent.click(button('Download .scs'));
     expect(persistence.saveSession).toHaveBeenCalledTimes(1);
     expect(persistence.downloadBundle).toHaveBeenCalledTimes(1);
-  });
-
-  it('Add sample card adds a card with a placement from platforms.json', () => {
-    openSavedSession();
-    render(<SessionPanel />);
-    fireEvent.click(button(/Add sample card/));
-    const added = store().session?.cards.at(-1);
-    expect(store().session?.cards).toHaveLength(4);
-    expect(platforms.placements.map((p) => p.placement)).toContain(added?.placement);
-    expect(screen.getByText('2 assets, 4 cards')).toBeInTheDocument();
-    expect(screen.getByText('Unsaved changes')).toBeInTheDocument();
-  });
-
-  it('the Undo button shows the depth and undoes the last card change', () => {
-    openSavedSession();
-    render(<SessionPanel />);
-    fireEvent.click(button(/Add sample card/));
-    fireEvent.click(button('Undo (1)'));
-    expect(store().session?.cards).toHaveLength(3);
-    expect(button('Undo (0)')).toBeDisabled();
   });
 });
 

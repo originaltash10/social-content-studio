@@ -10,3 +10,18 @@ const buttonBase = `rounded-button border px-3 py-1 font-medium disabled:cursor-
 export const primaryButtonClass = `${buttonBase} border-primary bg-primary text-white enabled:hover:bg-accent enabled:hover:border-accent`;
 
 export const buttonClass = `${buttonBase} border-muted bg-surface text-ink enabled:hover:bg-page`;
+
+/**
+ * Text colour for each card result. Each meets 4.5:1 contrast on the surface colour, and the
+ * badge always shows a symbol and a word as well, so colour is never the only signal.
+ */
+export const resultTextClass = {
+  pass: 'text-success-text',
+  warn: 'text-highlight-text',
+  fail: 'text-red-700',
+  unchecked: 'text-muted-text',
+} as const;
+
+/** Shared shape for the result and version badges. */
+export const badgeClass =
+  'inline-flex items-center gap-1 rounded-control border border-current px-2 py-0.5 text-label font-medium';

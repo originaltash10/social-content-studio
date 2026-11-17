@@ -19,6 +19,36 @@ export const RESULT_LABEL: Record<CardResult, string> = {
   unchecked: 'Not checked yet',
 };
 
+/** A symbol shown beside each result, so the badge never relies on colour alone. */
+export const RESULT_ICON: Record<CardResult, string> = {
+  pass: '✓',
+  warn: '!',
+  fail: '✕',
+  unchecked: '…',
+};
+
+/** A file size in decimal units, as file browsers show it: "820 bytes", "412 KB", "1.4 MB". */
+export function fileSizeLabel(bytes: number): string {
+  if (bytes < 1000) return `${bytes} ${bytes === 1 ? 'byte' : 'bytes'}`;
+  if (bytes < 1_000_000) return `${Math.round(bytes / 1000)} KB`;
+  return `${(bytes / 1_000_000).toFixed(1)} MB`;
+}
+
+/** What a finished file is, for example "1080 × 1350 JPG · 412 KB". */
+export function renderedFileLabel(render: Extract<CardRender, { kind: 'done' }>): string {
+  return `${render.width} × ${render.height} ${render.format.toUpperCase()} · ${fileSizeLabel(render.bytes)}`;
+}
+
+/** The alt text for a card's preview: the card's own when it has some. */
+export function previewAlt(card: Pick<Card, 'copy'>, fileName: string, name: string): string {
+  return card.copy.altText || `Preview of ${fileName} for ${name}`;
+}
+
+/** The note shown when a picture had to be enlarged to fill the placement. */
+export function upscaledNote(width: number, height: number): string {
+  return `Enlarged to fit: this photo is smaller than ${width} × ${height}, so it may look soft.`;
+}
+
 /** A card's result: its validation level once its file is rendered, "unchecked" until then. */
 export function resultOf(
   card: Pick<Card, 'validation'>,

@@ -5,12 +5,17 @@ import type { CardRender } from './controller';
 import {
   PLATFORM_FILTERS,
   RESULT_FILTERS,
+  RESULT_ICON,
   RESULT_LABEL,
+  fileSizeLabel,
   groupCards,
+  previewAlt,
+  upscaledNote,
   isPending,
   matches,
   platformCounts,
   renderSummary,
+  renderedFileLabel,
   resultOf,
 } from './view';
 
@@ -151,5 +156,45 @@ describe('renderSummary', () => {
       'Rendered 3 cards: 1 pass, 1 with warnings, 1 fail, 1 could not be rendered, 1 cancelled.',
     );
     expect(renderSummary([card('1')], new Map([['1', done]]))).toBe('Rendered 1 card: 1 pass.');
+  });
+});
+
+describe('file labels', () => {
+  it('gives every result a symbol', () => {
+    expect(RESULT_ICON).toEqual({ pass: '✓', warn: '!', fail: '✕', unchecked: '…' });
+  });
+
+  it('shows sizes in decimal units', () => {
+    expect(fileSizeLabel(1)).toBe('1 byte');
+    expect(fileSizeLabel(820)).toBe('820 bytes');
+    expect(fileSizeLabel(1000)).toBe('1 KB');
+    expect(fileSizeLabel(412_400)).toBe('412 KB');
+    expect(fileSizeLabel(1_000_000)).toBe('1.0 MB');
+    expect(fileSizeLabel(1_440_000)).toBe('1.4 MB');
+  });
+
+  it('describes a finished file', () => {
+    expect(renderedFileLabel({ ...done, width: 1080, height: 1350, bytes: 412_400 })).toBe(
+      '1080 × 1350 JPG · 412 KB',
+    );
+    expect(renderedFileLabel({ ...done, format: 'png', bytes: 2_500_000 })).toBe(
+      '1 × 1 PNG · 2.5 MB',
+    );
+  });
+});
+
+describe('preview text', () => {
+  it("uses the card's alt text, or says what the preview is", () => {
+    expect(previewAlt(card('1'), 'a.jpg', 'Instagram Feed vertical')).toBe(card('1').copy.altText);
+    const noAlt = card('2', { copy: { ...card('2').copy, altText: '' } });
+    expect(previewAlt(noAlt, 'a.jpg', 'Instagram Feed vertical')).toBe(
+      'Preview of a.jpg for Instagram Feed vertical',
+    );
+  });
+
+  it('explains an enlarged picture', () => {
+    expect(upscaledNote(1080, 1350)).toBe(
+      'Enlarged to fit: this photo is smaller than 1080 × 1350, so it may look soft.',
+    );
   });
 });
