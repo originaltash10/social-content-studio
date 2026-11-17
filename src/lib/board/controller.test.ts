@@ -6,10 +6,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getPlacement } from '../platforms';
 import { planRender } from '../render/plan';
-import type { RenderJob, RenderProgress, RenderResult } from '../render/protocol';
+import type { RenderResult } from '../render/protocol';
 import { RenderError, cancelledError } from '../render/protocol';
 import type { Asset, Card, ImageEdit, PlacementSpec, ValidationResult } from '../../types';
 import { makeAsset, makeCard } from '../../test/fixtures';
+import { fakeRenderClient, resultFor } from '../../test/fakeRenderClient';
+import type { FakeCall, FakeRenderClient } from '../../test/fakeRenderClient';
 import {
   NOT_SINGLE_IMAGE_MESSAGE,
   NO_PHOTO_MESSAGE,
@@ -26,63 +28,7 @@ import { renderedValidation } from './renderValidation';
 // Fakes
 // ---------------------------------------------------------------------------
 
-type Call = {
-  job: RenderJob;
-  onProgress: (progress: RenderProgress) => void;
-  resolve: (result: RenderResult) => void;
-  reject: (error: unknown) => void;
-  /** True once the job has been answered or cancelled. */
-  settled: boolean;
-};
-
-/**
- * A worker client whose jobs finish only when the test says so. Like the real client, cancel
- * rejects a pending job as cancelled and returns false for one that has already finished.
- */
-function fakeClient() {
-  const calls: Call[] = [];
-  const cancelled: string[] = [];
-  const waiters: { count: number; done: () => void }[] = [];
-  return {
-    calls,
-    cancelled,
-    /** Resolves once `count` jobs have been sent. */
-    sent(count: number): Promise<void> {
-      if (calls.length >= count) return Promise.resolve();
-      return new Promise((done) => waiters.push({ count, done }));
-    },
-    render: vi.fn(
-      (job: RenderJob, onProgress: (progress: RenderProgress) => void = () => undefined) =>
-        new Promise<RenderResult>((resolve, reject) => {
-          const entry: Call = {
-            job,
-            onProgress,
-            settled: false,
-            resolve: (result) => {
-              entry.settled = true;
-              resolve(result);
-            },
-            reject: (error) => {
-              entry.settled = true;
-              reject(error);
-            },
-          };
-          calls.push(entry);
-          for (const waiter of waiters.filter((w) => calls.length >= w.count)) {
-            waiters.splice(waiters.indexOf(waiter), 1);
-            waiter.done();
-          }
-        }),
-    ),
-    cancel: vi.fn((id: string) => {
-      cancelled.push(id);
-      const pending = calls.find((c) => c.job.id === id && !c.settled);
-      if (!pending) return false;
-      pending.reject(cancelledError(pending.job.fileName));
-      return true;
-    }),
-  };
-}
+type Call = FakeCall;
 
 /** Object URLs that are recorded instead of made. */
 function fakeUrls() {
@@ -138,22 +84,7 @@ function session(cards: Card[], overrides: Partial<BoardSession> = {}): BoardSes
   return { id: 'session-1', cards, assets: [ASSET], missingAssetIds: [], ...overrides };
 }
 
-/** A finished file at the job's planned size. */
-function resultFor(job: RenderJob, overrides: Partial<RenderResult> = {}): RenderResult {
-  return {
-    id: job.id,
-    blob: new Blob(['jpeg'], { type: 'image/jpeg' }),
-    width: job.plan.target.width,
-    height: job.plan.target.height,
-    bytes: 400_000,
-    mimeType: 'image/jpeg',
-    format: 'jpg',
-    upscaled: job.plan.upscaled,
-    ...overrides,
-  };
-}
-
-let client: ReturnType<typeof fakeClient>;
+let client: FakeRenderClient;
 let urls: ReturnType<typeof fakeUrls>;
 let writes: [string, ValidationResult][];
 let blobs: Map<string, Blob>;
@@ -193,7 +124,7 @@ function until(check: () => boolean): Promise<void> {
 }
 
 beforeEach(() => {
-  client = fakeClient();
+  client = fakeRenderClient();
   urls = fakeUrls();
   writes = [];
   blobs = new Map([[ASSET.id, photo()]]);
@@ -777,6 +708,72 @@ describe('sequences the board can produce', () => {
     expect(client.render).toHaveBeenCalledTimes(3);
     finish(2);
     await controller.idle();
+  });
+});
+
+describe('a sync that throws part-way', () => {
+  const failing = (placement: string) =>
+    make({
+      specOf: (platform, key) => {
+        if (key === placement) throw new Error('platform data could not be read');
+        return getPlacement(platform, key);
+      },
+    });
+
+  it('still records results that arrive afterwards', async () => {
+    controller.dispose();
+    controller = failing('boom');
+    controller.sync(session([card('c1')]));
+    await client.sent(1);
+    expect(() =>
+      controller.sync(session([card('c1'), card('c2', FEED, { placement: 'boom' })])),
+    ).toThrow('platform data could not be read');
+    // c1's render was already under way; its result must not be held by the failed sync.
+    finish(0);
+    await controller.idle();
+    expect(writtenFor('c1')).toHaveLength(1);
+    expect(renderOf('c1')?.kind).toBe('done');
+    // A later sync that succeeds records its results too.
+    writes.length = 0;
+    const withLink = card('c1', FEED, {
+      copy: { caption: 'https://example.com', firstComment: '', hashtags: [], altText: 'A crane.' },
+    });
+    controller.sync(session([withLink]));
+    expect(writtenFor('c1')).toHaveLength(1);
+  });
+
+  it('shows the cards it started before it stopped', () => {
+    controller.dispose();
+    controller = failing('boom');
+    const listener = vi.fn();
+    controller.subscribe(listener);
+    expect(() =>
+      controller.sync(session([card('c1'), card('c2', FEED, { placement: 'boom' })])),
+    ).toThrow();
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(renderOf('c1')).toEqual({ kind: 'waiting' });
+    expect(renderOf('c2')).toBeUndefined();
+  });
+
+  it('Render again works for a card it listed but did not reach', async () => {
+    let throwing = true;
+    controller.dispose();
+    controller = make({
+      specOf: (platform, key) => {
+        if (throwing && key === 'image-square') throw new Error('platform data could not be read');
+        return getPlacement(platform, key);
+      },
+    });
+    expect(() => controller.sync(session([card('c1'), card('c2', SQUARE)]))).toThrow();
+    expect(renderOf('c2')).toBeUndefined();
+    throwing = false;
+    controller.renderAgain('c2');
+    expect(renderOf('c2')).toEqual({ kind: 'waiting' });
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    expect(writtenFor('c2')).toHaveLength(1);
   });
 });
 

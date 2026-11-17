@@ -305,34 +305,40 @@ export function createRenderController(deps: ControllerDeps): RenderController {
     if (disposed) return;
     const found: [string, ValidationResult][] = [];
     held = found;
-    if (session.id !== current.id) {
-      for (const id of [...tracked.keys()]) forget(id);
-    }
-    current = session;
-    const ids = new Set(session.cards.map((card) => card.id));
-    for (const id of [...tracked.keys()]) if (!ids.has(id)) forget(id);
-    for (const card of session.cards) {
-      const target = targetFor(card);
-      const entry = tracked.get(card.id);
-      if (entry && entry.key === target.key) {
-        // A file is kept only for a plan that could be rendered, so a finished file implies
-        // `target.ok`; the check narrows the type.
-        if (target.ok && entry.made) validateMade(card, entry.made, target);
-        continue;
+    try {
+      if (session.id !== current.id) {
+        for (const id of [...tracked.keys()]) forget(id);
       }
-      if (entry) stopJob(entry);
-      start(card, target);
+      current = session;
+      const ids = new Set(session.cards.map((card) => card.id));
+      for (const id of [...tracked.keys()]) if (!ids.has(id)) forget(id);
+      for (const card of session.cards) {
+        const target = targetFor(card);
+        const entry = tracked.get(card.id);
+        if (entry && entry.key === target.key) {
+          // A file is kept only for a plan that could be rendered, so a finished file implies
+          // `target.ok`; the check narrows the type.
+          if (target.ok && entry.made) validateMade(card, entry.made, target);
+          continue;
+        }
+        if (entry) stopJob(entry);
+        start(card, target);
+      }
+    } finally {
+      // Even if something above threw, later results must be recorded, not held forever, and
+      // the cards started so far must show.
+      held = null;
+      changed();
     }
-    held = null;
-    changed();
     for (const [cardId, result] of found) deps.writeResult(cardId, result);
   }
 
   function renderAgain(cardId: string): void {
     const card = current.cards.find((c) => c.id === cardId);
     if (disposed || !card) return;
-    // Every card in the session is tracked once it has been synced.
-    stopJob(tracked.get(cardId) as Tracked);
+    // A card is untracked only if the sync that listed it stopped part-way because it threw.
+    const entry = tracked.get(cardId);
+    if (entry) stopJob(entry);
     start(card, targetFor(card));
     changed();
   }
