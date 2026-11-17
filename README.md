@@ -22,9 +22,12 @@ The app is not yet usable for making posts. What works today:
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), and the checker that compares a post against them is
   written and tested. It is not yet connected to anything on screen.
+- **Image resizing.** The engine that crops a photo around its focal point and resizes it to a
+  placement's size, as JPG or PNG, is built and tested. Nothing on screen uses it yet; it will be
+  usable from the board of posts in a later step.
 
-The screen is a plain test panel for sessions and importing. Importing video, cropping and
-resizing, captions, the board of posts and export are planned but not built yet.
+The screen is a plain test panel for sessions and importing. Still planned and not built yet:
+importing video, captions, the board of posts, the editor for adjusting a crop, and export.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy
