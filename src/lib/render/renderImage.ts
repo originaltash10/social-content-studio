@@ -3,27 +3,21 @@
  * and encode it as JPG or PNG. Written to run inside the image worker, but nothing here depends
  * on being in one: the browser functions it uses are passed in, so tests can replace them.
  *
- * Two ways of getting from file to pixels:
+ * The whole photo is decoded, then `drawImage` crops and scales it in one go with high-quality
+ * smoothing. `createImageBitmap` can also crop and resize while decoding, which would avoid
+ * holding the full-size bitmap, but in Chromium that route takes the crop from the wrong place
+ * for photos stored with a rotation, and shrinks a cropped photo with a coarse filter that
+ * leaves fine detail jagged. It is not used.
  *
- * - Crop-and-resize in one step. `createImageBitmap` is asked to decode, crop and resize
- *   together, so the only bitmap this code ever holds is the size of the output. This keeps
- *   memory low for large photos. Not every browser supports the options it needs.
- * - Full decode, then draw. The whole photo is decoded and `drawImage` crops and scales it with
- *   high-quality smoothing. Works everywhere. HEIC always goes this way, because the HEIC
- *   decoder hands back the whole photo.
- *
- * The first is used when the browser reads the options (checked once), and its result is
- * checked: if it throws or the bitmap is not the planned size, the second is used instead.
- *
- * Orientation is handled as at import (`imageOrientation: 'from-image'`), so crops line up with
- * the width and height stored on the asset. Every bitmap is closed before this returns, whether
- * the render worked or not.
+ * Orientation is handled as at import (`imageOrientation: 'from-image'`; the HEIC decoder
+ * applies it itself), and the decoded size is checked against the size recorded at import, so
+ * a crop always lines up with the photo it was planned for. The bitmap is closed before this
+ * returns, whether the render worked or not.
  */
 
 import { damagedMessage, heicMessage } from '../image/decode';
 import { decodeHeic } from '../image/heic';
 import type { HeicDecoder } from '../image/heic';
-import type { PixelRect } from './crop';
 import { clampQuality } from './plan';
 import type { OutputFormat, RenderPlan } from './plan';
 import { RenderError, unexpectedError } from './protocol';
@@ -48,41 +42,6 @@ export function browserDeps(): RenderDeps {
     createCanvas: (width, height) => new OffscreenCanvas(width, height),
     heicDecoder: decodeHeic,
   };
-}
-
-const RESIZE_OPTIONS = ['resizeWidth', 'resizeHeight', 'resizeQuality'] as const;
-
-/**
- * True when this browser's `createImageBitmap` reads the resize options. It is called once with
- * an options object that records which options were looked at; a browser that does not know an
- * option never looks at it.
- */
-export function supportsCropResize(deps: Pick<RenderDeps, 'createImageBitmap' | 'createCanvas'>) {
-  const read = new Set<string>();
-  const options = {
-    get resizeWidth() {
-      read.add('resizeWidth');
-      return 1;
-    },
-    get resizeHeight() {
-      read.add('resizeHeight');
-      return 1;
-    },
-    get resizeQuality(): ResizeQuality {
-      read.add('resizeQuality');
-      return 'high';
-    },
-  };
-  try {
-    const probe = deps.createCanvas(1, 1) as unknown as ImageBitmapSource;
-    deps.createImageBitmap(probe, 0, 0, 1, 1, options).then(
-      (bitmap) => bitmap.close(),
-      () => undefined,
-    );
-  } catch {
-    return false;
-  }
-  return RESIZE_OPTIONS.every((option) => read.has(option));
 }
 
 const MIME: Record<OutputFormat, string> = { jpg: 'image/jpeg', png: 'image/png' };
@@ -114,9 +73,6 @@ function encodeMessage(fileName: string, format: OutputFormat): string {
   );
 }
 
-/** A bitmap ready to draw, and the part of it that goes into the output. */
-type Drawable = { bitmap: ImageBitmap; from: PixelRect };
-
 /** Renders one job. Rejects only with a RenderError, whose message is written for the user. */
 export type ImageRenderer = (
   job: RenderJob,
@@ -124,28 +80,6 @@ export type ImageRenderer = (
 ) => Promise<RenderResult>;
 
 export function createImageRenderer(deps: RenderDeps = browserDeps()): ImageRenderer {
-  let cropResize: boolean | undefined;
-  const canCropResize = () => (cropResize ??= supportsCropResize(deps));
-
-  /** Decode, crop and resize in one step. Null when that did not give the planned bitmap. */
-  async function cropResizeDecode({ blob, plan }: RenderJob): Promise<ImageBitmap | null> {
-    const { crop, target } = plan;
-    let bitmap: ImageBitmap;
-    try {
-      bitmap = await deps.createImageBitmap(blob, crop.x, crop.y, crop.width, crop.height, {
-        imageOrientation: 'from-image',
-        resizeWidth: target.width,
-        resizeHeight: target.height,
-        resizeQuality: 'high',
-      });
-    } catch {
-      return null;
-    }
-    if (bitmap.width === target.width && bitmap.height === target.height) return bitmap;
-    bitmap.close();
-    return null;
-  }
-
   /** Decodes the whole photo in displayed orientation. */
   async function fullDecode(job: RenderJob): Promise<ImageBitmap> {
     const { blob, fileName, sourceFormat, plan } = job;
@@ -168,29 +102,29 @@ export function createImageRenderer(deps: RenderDeps = browserDeps()): ImageRend
     throw error;
   }
 
-  async function decode(job: RenderJob): Promise<Drawable> {
-    if (job.sourceFormat !== 'heic' && canCropResize()) {
-      const bitmap = await cropResizeDecode(job);
-      if (bitmap) {
-        return { bitmap, from: { x: 0, y: 0, width: bitmap.width, height: bitmap.height } };
-      }
-    }
-    return { bitmap: await fullDecode(job), from: job.plan.crop };
-  }
-
-  function draw({ bitmap, from }: Drawable, plan: RenderPlan, fileName: string): RenderCanvas {
-    const { width, height } = plan.target;
+  function draw(bitmap: ImageBitmap, plan: RenderPlan, fileName: string): RenderCanvas {
+    const { crop, target } = plan;
     try {
-      const canvas = deps.createCanvas(width, height);
+      const canvas = deps.createCanvas(target.width, target.height);
       const context = canvas.getContext('2d');
       if (!context) throw new Error('no 2d context');
       if (plan.format === 'jpg') {
         context.fillStyle = JPG_BACKGROUND;
-        context.fillRect(0, 0, width, height);
+        context.fillRect(0, 0, target.width, target.height);
       }
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';
-      context.drawImage(bitmap, from.x, from.y, from.width, from.height, 0, 0, width, height);
+      context.drawImage(
+        bitmap,
+        crop.x,
+        crop.y,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        target.width,
+        target.height,
+      );
       return canvas;
     } catch {
       throw new RenderError('canvas', canvasMessage(fileName));
@@ -224,13 +158,13 @@ export function createImageRenderer(deps: RenderDeps = browserDeps()): ImageRend
 
   async function render(job: RenderJob, onStage: (stage: RenderStage) => void) {
     onStage('decoding');
-    const drawable = await decode(job);
+    const bitmap = await fullDecode(job);
     let canvas: RenderCanvas;
     try {
       onStage('drawing');
-      canvas = draw(drawable, job.plan, job.fileName);
+      canvas = draw(bitmap, job.plan, job.fileName);
     } finally {
-      drawable.bitmap.close();
+      bitmap.close();
     }
     onStage('encoding');
     const { blob, format } = await encode(canvas, job.plan, job.fileName);
