@@ -31,9 +31,12 @@ import {
 } from '../lib/board/view';
 import type { PlatformFilter, ResultFilter } from '../lib/board/view';
 import { getPlacement, platforms } from '../lib/platforms';
+import { isImageEdit } from '../lib/board/renderValidation';
 import { getAssetBlob, useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, PlacementSpec } from '../types';
 import { buttonClass, focusClass } from '../app/styles';
+import { Editor } from '../editor/Editor';
+import type { PhotoLoader } from '../editor/useSourcePhoto';
 import { CardDetails } from './CardDetails';
 import { CardTile } from './CardTile';
 import { CreateCards } from './CreateCards';
@@ -46,6 +49,8 @@ export type BoardProps = {
   createClient?: () => BoardClient;
   /** Hears each controller as it is created (and null when it goes), so tests can await it. */
   onController?: (controller: RenderController | null) => void;
+  /** Opens a photo for the editor. Tests pass a fake. */
+  loadPhoto?: PhotoLoader;
 };
 
 const EMPTY: ReadonlyMap<string, CardRender> = new Map();
@@ -72,7 +77,11 @@ function cardLabel(name: string, fileName: string, version: VersionInfo): string
   return `${name} for ${fileName}, ${versionLabel(version)}`;
 }
 
-export function Board({ createClient = createImageWorkerClient, onController }: BoardProps) {
+export function Board({
+  createClient = createImageWorkerClient,
+  onController,
+  loadPhoto,
+}: BoardProps) {
   const session = useSessionStore((state) => state.session);
   const missingAssetIds = useSessionStore((state) => state.missingAssetIds);
   const [slot] = useState(() => new Slot<RenderController | null>(null));
@@ -131,6 +140,7 @@ export function Board({ createClient = createImageWorkerClient, onController }: 
   const counts = platformCounts(cards);
   const pendingCount = cards.filter((card) => isPending(renders.get(card.id))).length;
   const openCard = cards.find((card) => card.id === openId);
+  const openAsset = assets.find((asset) => asset.id === openCard?.assetIds[0]);
 
   // A session change closes the form and the dialog, and clears the old session's message.
   const sessionId = session?.id ?? null;
@@ -168,6 +178,24 @@ export function Board({ createClient = createImageWorkerClient, onController }: 
 
   function onDuplicate(card: Card, name: string) {
     if (useSessionStore.getState().duplicateCard(card.id)) setMessage(`Made a copy of ${name}.`);
+  }
+
+  /** The editor for a card for one photo in a known placement; nothing for any other card. */
+  function editorFor(card: Card, asset: Asset | undefined) {
+    const target = describe(card).spec?.sizes[0];
+    const edit = card.edit;
+    if (!asset || asset.kind !== 'image' || !target || card.assetIds.length !== 1) return undefined;
+    if (!isImageEdit(edit)) return undefined;
+    return (
+      <Editor
+        key={card.id}
+        card={{ ...card, edit }}
+        asset={asset}
+        target={target}
+        blob={missingAssetIds.includes(asset.id) ? undefined : getAssetBlob(asset.id)}
+        loadPhoto={loadPhoto}
+      />
+    );
   }
 
   function showAll() {
@@ -317,7 +345,7 @@ export function Board({ createClient = createImageWorkerClient, onController }: 
       <dialog
         ref={dialog}
         aria-labelledby={dialogHeadingId}
-        className="m-auto w-[min(48rem,calc(100vw-2rem))] rounded-card bg-surface p-6 text-ink backdrop:bg-ink/40"
+        className="m-auto w-[min(64rem,calc(100vw-2rem))] rounded-card bg-surface p-6 text-ink backdrop:bg-ink/40"
         onClose={onDialogClose}
       >
         {openCard && (
@@ -325,10 +353,8 @@ export function Board({ createClient = createImageWorkerClient, onController }: 
             <CardDetails
               card={openCard}
               name={describe(openCard).name}
-              fileName={
-                assets.find((asset) => asset.id === openCard.assetIds[0])?.fileName ??
-                'A photo that is not in this session'
-              }
+              fileName={openAsset?.fileName ?? 'A photo that is not in this session'}
+              editor={editorFor(openCard, openAsset)}
               render={renders.get(openCard.id)}
               version={versions.get(openCard.id) as VersionInfo}
               headingId={dialogHeadingId}
