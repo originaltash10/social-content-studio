@@ -550,6 +550,47 @@ describe('the details dialog', () => {
     expect(note).toHaveClass('text-ink-secondary');
   });
 
+  it('leaves the card alone when it is opened and closed without a change', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    // A crop far below the smallest the editor allows: opening must not correct it.
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        if ('crop' in card.edit) card.edit.crop = { x: 0.4, y: 0.4, width: 0.003, height: 0.005 };
+      });
+    });
+    await sent(2);
+    answer(1);
+    await idle();
+    act(() => store().markSaved(store().revision));
+    const before = {
+      card: store().session?.cards[0],
+      session: store().session,
+      undoSteps: store().undoStack.length,
+      revision: store().revision,
+    };
+    expect(store().dirty).toBe(false);
+
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await idle();
+    expect(dialog.open).toBe(false);
+
+    // The very same objects: nothing was written, not even an equal value.
+    expect(store().session).toBe(before.session);
+    expect(store().session?.cards[0]).toBe(before.card);
+    expect(store().undoStack).toHaveLength(before.undoSteps);
+    expect(store().revision).toBe(before.revision);
+    expect(store().dirty).toBe(false);
+  });
+
   it('closes when undo removes its card, and moves focus to the board heading', async () => {
     const { dialog } = await openDetails();
     act(() => {
