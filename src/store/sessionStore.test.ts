@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UNDO_LIMIT, assetBlobs, emptyBrand, getAssetBlob, useSessionStore } from './sessionStore';
+import {
+  UNDO_LIMIT,
+  assetBlobs,
+  emptyBrand,
+  getAssetBlob,
+  sameValue,
+  useSessionStore,
+} from './sessionStore';
 import type { NewCard } from './sessionStore';
 import { hash, makeAsset, makeBrand, makeCard, makeSession } from '../test/fixtures';
-import type { Card, Session } from '../types';
+import type { Card, Session, ValidationResult } from '../types';
 
 const store = () => useSessionStore.getState();
 
@@ -244,6 +251,134 @@ describe('updateCard', () => {
       card.id = 'hijacked';
     });
     expect(open().cards.map((c) => c.id)).toEqual([id]);
+  });
+});
+
+describe('setValidation', () => {
+  let id: string;
+  const failed: ValidationResult = {
+    level: 'fail',
+    issues: [
+      { rule: 1, level: 'fail', message: 'The image is 1000 x 1000; it must be 1080 x 1350.' },
+      { rule: 8, level: 'warn', message: 'Alt text is missing.' },
+    ],
+  };
+  beforeEach(() => {
+    store().createSession('S');
+    id = store().addCard(newCard());
+    save();
+  });
+
+  it("replaces that card's validation result and returns true", () => {
+    const other = store().addCard(newCard());
+    const otherBefore = cardById(other).validation;
+    expect(store().setValidation(id, failed)).toBe(true);
+    expect(cardById(id).validation).toEqual(failed);
+    expect(cardById(other).validation).toEqual(otherBefore);
+  });
+
+  it('changes nothing else on the card', () => {
+    const before = cardById(id);
+    store().setValidation(id, failed);
+    expect({ ...cardById(id), validation: before.validation }).toEqual(before);
+  });
+
+  it('sets dirty, bumps the revision and updatedAt when the result changes', () => {
+    const revision = store().revision;
+    vi.setSystemTime(new Date('2026-11-16T12:05:00.000Z'));
+    store().setValidation(id, failed);
+    expect(store().dirty).toBe(true);
+    expect(store().revision).toBe(revision + 1);
+    expect(open().updatedAt).toBe('2026-11-16T12:05:00.000Z');
+  });
+
+  it('is not an undo step', () => {
+    const depth = store().undoStack.length;
+    store().setValidation(id, failed);
+    expect(store().undoStack).toHaveLength(depth);
+  });
+
+  it('changes nothing for a result equal in value, even as a different object', () => {
+    store().setValidation(id, failed);
+    save();
+    const revision = store().revision;
+    const updatedAt = open().updatedAt;
+    const card = cardById(id);
+    vi.setSystemTime(new Date('2026-11-16T12:10:00.000Z'));
+    expect(store().setValidation(id, structuredClone(failed))).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open().updatedAt).toBe(updatedAt);
+    expect(cardById(id)).toBe(card);
+  });
+
+  it('treats the same issues in a different order as a change', () => {
+    store().setValidation(id, failed);
+    save();
+    const reordered: ValidationResult = { level: 'fail', issues: [...failed.issues].reverse() };
+    store().setValidation(id, reordered);
+    expect(store().dirty).toBe(true);
+    expect(cardById(id).validation).toEqual(reordered);
+  });
+
+  it('does not keep a reference to the result it was given', () => {
+    const result = structuredClone(failed);
+    store().setValidation(id, result);
+    result.level = 'pass';
+    result.issues.length = 0;
+    expect(cardById(id).validation).toEqual(failed);
+  });
+
+  it('returns false and changes nothing for an unknown id', () => {
+    const revision = store().revision;
+    expect(store().setValidation('nope', failed)).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('returns false when no session is open', () => {
+    store().clearSession(() => true);
+    expect(store().setValidation(id, failed)).toBe(false);
+    expect(store().session).toBeNull();
+  });
+
+  it('leaves undo of a real edit working as before', () => {
+    const before = cardById(id);
+    store().updateCard(id, (card) => {
+      card.copy.caption = 'Edited';
+    });
+    const depth = store().undoStack.length;
+    store().setValidation(id, failed);
+    expect(store().undoStack).toHaveLength(depth);
+    expect(store().undo()).toBe(true);
+    // Undo restores the card exactly as it was before the edit, validation included; the board
+    // validates the restored card again.
+    expect(cardById(id)).toEqual(before);
+    expect(store().undoStack).toHaveLength(depth - 1);
+    // The next undo removes the card, which addCard created: no step was spent on validation.
+    expect(store().undo()).toBe(true);
+    expect(open().cards).toEqual([]);
+    expect(store().undo()).toBe(false);
+  });
+});
+
+describe('sameValue', () => {
+  it('compares plain data by value', () => {
+    expect(sameValue({ a: 1, b: [1, { c: 'x' }] }, { b: [1, { c: 'x' }], a: 1 })).toBe(true);
+    expect(sameValue('x', 'x')).toBe(true);
+    expect(sameValue(null, null)).toBe(true);
+  });
+
+  it('tells different values apart', () => {
+    expect(sameValue(1, 2)).toBe(false);
+    expect(sameValue(1, '1')).toBe(false);
+    expect(sameValue(null, {})).toBe(false);
+    expect(sameValue({}, null)).toBe(false);
+    expect(sameValue([1, 2], [2, 1])).toBe(false);
+    expect(sameValue([1], { 0: 1 })).toBe(false);
+    expect(sameValue({ a: 1 }, { a: 1, b: 2 })).toBe(false);
+    expect(sameValue({ a: 1, b: undefined }, { a: 1, c: undefined })).toBe(false);
+    expect(sameValue({ a: { b: 1 } }, { a: { b: 2 } })).toBe(false);
   });
 });
 

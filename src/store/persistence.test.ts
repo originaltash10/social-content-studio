@@ -481,6 +481,41 @@ describe('autosave', () => {
   });
 });
 
+describe('validation results', () => {
+  const result = {
+    level: 'fail' as const,
+    issues: [
+      { rule: 1 as const, level: 'fail' as const, message: 'Wrong size.' },
+      { rule: 8 as const, level: 'warn' as const, message: 'Alt text is missing.' },
+    ],
+  };
+
+  it('set with setValidation survive a save and reopening the folder', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    expect(store().setValidation('card-1', result)).toBe(true);
+    expect(await saveSession()).toBe(true);
+    await requestClearSession(() => true);
+    expect(store().session).toBeNull();
+    await openFolder(dir);
+    expect(open().cards.find((card) => card.id === 'card-1')?.validation).toEqual(result);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('do not trigger an autosave when the same result is recorded again', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const stop = startAutosave();
+    store().setValidation('card-1', structuredClone(makeCard().validation));
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2);
+    expect(dir.log).toEqual([]);
+    store().setValidation('card-1', result);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
+    stop();
+    expect(writes(dir)).toEqual(['write brand.json', 'write session.json']);
+  });
+});
+
 describe('opening a folder', () => {
   it('loads the session, the brand kit and the asset files', async () => {
     const dir = await folderWithSession();
