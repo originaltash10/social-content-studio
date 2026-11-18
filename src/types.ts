@@ -48,6 +48,8 @@ export type Card = {
   platform: Platform;
   placement: string; // key into platforms.json (PlacementSpec.placement)
   parentId?: string; // set when duplicated; gives lineage
+  /** 0..1. The card's own focal point, set when duplicated. Without it the card uses its photo's. */
+  focal?: { x: number; y: number };
   version: number;
   status: 'draft' | 'review' | 'approved';
   edit: ImageEdit | VideoEdit | CarouselEdit;
