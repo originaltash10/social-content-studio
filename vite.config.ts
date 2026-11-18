@@ -35,6 +35,8 @@ export default defineConfig({
         'src/lib/board/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         // The editor's geometry: crop limits, moving and resizing, screen-to-photo mapping.
         'src/lib/editor/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        // Export: file names, metadata stripping, captions.csv and the export run itself.
+        'src/lib/export/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/store/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
