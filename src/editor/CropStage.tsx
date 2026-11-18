@@ -8,8 +8,9 @@
  * if the crop actually changed. A cancelled drag changes nothing.
  *
  * The round marker is the focal point the card uses (the photo's, or the card's own), which its
- * automatic crop is centred on. It is dragged the same way, with one `onFocalCommit` on release. While it is dragged, `cropFor`
- * says what the crop would become, so the crop is seen to follow.
+ * automatic crop is centred on. It is dragged the same way, with one `onFocalCommit` on
+ * release. While it is dragged, `cropFor` says what the crop would become, so the crop is seen
+ * to follow.
  *
  * Everything is placed in percentages of the photo's frame, so the area can change size with
  * the dialog or the window without the crop changing: a crop is always fractions of the photo.
