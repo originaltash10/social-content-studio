@@ -457,6 +457,218 @@ describe('duplicateCard', () => {
   });
 });
 
+describe("duplicateCard and the card's own focal point", () => {
+  const PHOTO = hash('a');
+  const OTHER = hash('b');
+
+  function duplicate(id: string): Card {
+    const copyId = store().duplicateCard(id);
+    if (!copyId) throw new Error('expected a new card id');
+    return cardById(copyId);
+  }
+
+  beforeEach(() => {
+    store().createSession('S');
+    store().addAssets([
+      { asset: makeAsset({ id: PHOTO, focal: { x: 0.3, y: 0.6 } }) },
+      { asset: makeAsset({ id: OTHER, fileName: 'other.jpg', focal: { x: 0.9, y: 0.1 } }) },
+    ]);
+  });
+
+  it("gives the copy of a shared card the photo's focal point as its own", () => {
+    const id = store().addCard(newCard());
+    const before = cardById(id);
+    const copy = duplicate(id);
+    expect(copy.focal).toEqual({ x: 0.3, y: 0.6 });
+    // The source is the very same card: still without a point of its own.
+    expect(cardById(id)).toBe(before);
+    expect(Object.hasOwn(cardById(id), 'focal')).toBe(false);
+  });
+
+  it('copies the point as it is at that moment: a later move of the photo does not reach it', () => {
+    const id = store().addCard(newCard());
+    const copy = duplicate(id);
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.8 });
+    expect(cardById(copy.id).focal).toEqual({ x: 0.3, y: 0.6 });
+    // A copy made now takes the photo's point as it is now.
+    expect(duplicate(id).focal).toEqual({ x: 0.8, y: 0.8 });
+  });
+
+  it("copies a card's own point when a duplicate is duplicated, not the photo's", () => {
+    const id = store().addCard(newCard());
+    const second = duplicate(id);
+    store().updateCard(second.id, (card) => {
+      card.focal = { x: 0.1, y: 0.2 };
+    });
+    const third = duplicate(second.id);
+    expect(third.focal).toEqual({ x: 0.1, y: 0.2 });
+    expect(third.parentId).toBe(second.id);
+    expect(cardById(second.id).focal).toEqual({ x: 0.1, y: 0.2 });
+  });
+
+  it("gives the copy a point of its own, not a reference to the source's", () => {
+    const id = store().addCard(newCard());
+    const second = duplicate(id);
+    const third = duplicate(second.id);
+    expect(third.focal).not.toBe(cardById(second.id).focal);
+    store().updateCard(third.id, (card) => {
+      card.focal = { x: 0.7, y: 0.7 };
+    });
+    expect(cardById(second.id).focal).toEqual({ x: 0.3, y: 0.6 });
+    expect(open().assets[0]?.focal).toEqual({ x: 0.3, y: 0.6 });
+  });
+
+  it('copies only x and y of the point', () => {
+    const id = store().addCard(newCard());
+    store().updateCard(id, (card) => {
+      card.focal = { x: 0.4, y: 0.5, extra: 'no' } as Card['focal'];
+    });
+    expect(Object.keys(duplicate(id).focal ?? {})).toEqual(['x', 'y']);
+  });
+
+  it("copies a card's own point even when its photo is not in the session", () => {
+    const id = store().addCard(newCard({ assetIds: [hash('f')] }));
+    store().updateCard(id, (card) => {
+      card.focal = { x: 0.15, y: 0.85 };
+    });
+    expect(duplicate(id).focal).toEqual({ x: 0.15, y: 0.85 });
+  });
+
+  it("copies a card's own point even when the card uses more than one photo", () => {
+    const id = store().addCard(newCard({ assetIds: [PHOTO, OTHER] }));
+    store().updateCard(id, (card) => {
+      card.focal = { x: 0.15, y: 0.85 };
+    });
+    expect(duplicate(id).focal).toEqual({ x: 0.15, y: 0.85 });
+  });
+
+  it('gives no point to the copy of a shared card whose photo is not in the session', () => {
+    const copy = duplicate(store().addCard(newCard({ assetIds: [hash('f')] })));
+    expect(Object.hasOwn(copy, 'focal')).toBe(false);
+  });
+
+  it('gives no point to the copy of a shared card that uses more than one photo, or none', () => {
+    const pair = duplicate(store().addCard(newCard({ assetIds: [PHOTO, OTHER] })));
+    expect(Object.hasOwn(pair, 'focal')).toBe(false);
+    const none = duplicate(store().addCard(newCard({ assetIds: [] })));
+    expect(Object.hasOwn(none, 'focal')).toBe(false);
+  });
+
+  it('is removed by one undo, which leaves the source and the photo as they were', () => {
+    const id = store().addCard(newCard());
+    const before = { card: cardById(id), assets: open().assets };
+    const copy = duplicate(id);
+    expect(store().undo()).toBe(true);
+    expect(open().cards.some((c) => c.id === copy.id)).toBe(false);
+    expect(cardById(id)).toBe(before.card);
+    expect(open().assets).toEqual(before.assets);
+  });
+});
+
+describe("moving a card's own focal point", () => {
+  const PHOTO = hash('a');
+  const crop = (x: number) => ({ x, y: 0, width: 0.5, height: 1 });
+  let shared: string;
+  let sibling: string;
+  let own: string;
+
+  const cropOf = (id: string) => (cardById(id).edit as { crop?: unknown }).crop;
+  const photoFocal = () => open().assets[0]?.focal;
+
+  beforeEach(() => {
+    store().createSession('S');
+    store().addAssets([{ asset: makeAsset({ id: PHOTO, focal: { x: 0.5, y: 0.5 } }) }]);
+    shared = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.25) }) }));
+    sibling = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.25) }) }));
+    own = store().duplicateCard(shared) as string;
+    save();
+  });
+
+  it('changes only that card: not the photo, the source, or its siblings', () => {
+    const before = { shared: cardById(shared), sibling: cardById(sibling), assets: open().assets };
+    store().updateCard(own, (card) => {
+      card.focal = { x: 0.9, y: 0.2 };
+      (card.edit as { crop: unknown }).crop = crop(0.5);
+    });
+    expect(cardById(own).focal).toEqual({ x: 0.9, y: 0.2 });
+    expect(cropOf(own)).toEqual(crop(0.5));
+    expect(cardById(shared)).toBe(before.shared);
+    expect(cardById(sibling)).toBe(before.sibling);
+    expect(open().assets).toBe(before.assets);
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('is one ordinary undo step that restores the point and the crop together', () => {
+    const steps = store().undoStack.length;
+    const before = cardById(own);
+    store().updateCard(own, (card) => {
+      card.focal = { x: 0.9, y: 0.2 };
+      (card.edit as { crop: unknown }).crop = crop(0.5);
+    });
+    expect(store().undoStack).toHaveLength(steps + 1);
+    expect(store().undoStack.at(-1)).toEqual({ cardId: own, before });
+
+    expect(store().undo()).toBe(true);
+    expect(cardById(own)).toBe(before);
+    expect(cardById(own).focal).toEqual({ x: 0.5, y: 0.5 });
+    expect(cropOf(own)).toEqual(crop(0.25));
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+    expect(store().undoStack).toHaveLength(steps);
+  });
+
+  it("a move of the photo's point never re-crops a card with its own point", () => {
+    const before = cardById(own);
+    // The card's crop matches its siblings', and it is listed, but it has its own point.
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: shared, crop: crop(0.5) },
+      { cardId: sibling, crop: crop(0.5) },
+      { cardId: own, crop: crop(0.5) },
+    ]);
+    expect(cropOf(shared)).toEqual(crop(0.5));
+    expect(cropOf(sibling)).toEqual(crop(0.5));
+    expect(cardById(own)).toBe(before);
+    expect(cardById(own).focal).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it("listing only a card with its own point, with the photo's point unmoved, changes nothing", () => {
+    const steps = store().undoStack.length;
+    const before = store().revision;
+    expect(
+      store().setAssetFocal(PHOTO, { x: 0.5, y: 0.5 }, [{ cardId: own, crop: crop(0.5) }]),
+    ).toBe(true);
+    expect(store().revision).toBe(before);
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().dirty).toBe(false);
+  });
+
+  it("one undo of a move of the photo's point leaves a card with its own point untouched", () => {
+    store().updateCard(own, (card) => {
+      card.focal = { x: 0.9, y: 0.2 };
+      (card.edit as { crop: unknown }).crop = crop(0.4);
+    });
+    const ownBefore = cardById(own);
+    const before = { shared: cardById(shared), sibling: cardById(sibling) };
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: shared, crop: crop(0.5) },
+      { cardId: sibling, crop: crop(0.5) },
+      { cardId: own, crop: crop(0.5) },
+    ]);
+    const entry = store().undoStack.at(-1) as { cardsBefore: Card[] };
+    expect(entry.cardsBefore.map((c) => c.id)).toEqual([shared, sibling]);
+
+    expect(store().undo()).toBe(true);
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+    expect(cardById(shared)).toEqual(before.shared);
+    expect(cardById(sibling)).toEqual(before.sibling);
+    expect(cardById(own)).toBe(ownBefore);
+
+    // The next undo is the card's own move, on its own.
+    expect(store().undo()).toBe(true);
+    expect(cardById(own).focal).toEqual({ x: 0.5, y: 0.5 });
+    expect(cropOf(own)).toEqual(crop(0.25));
+  });
+});
+
 describe('undo', () => {
   let id: string;
   beforeEach(() => {
