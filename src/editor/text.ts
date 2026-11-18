@@ -16,8 +16,22 @@ export function cropReadout(crop: Rect): string {
   );
 }
 
-export function focalLabel(fileName: string): string {
-  return `Focal point of ${fileName}. Arrow keys move it. Hold Shift for bigger steps.`;
+/** Which focal point a card uses: its photo's, shared with other cards, or its own. */
+export type FocalKind = 'shared' | 'own';
+
+/** The marker's accessible name: what it is, whose it is, and what the arrow keys do. */
+export function focalLabel(fileName: string, kind: FocalKind): string {
+  const keys = 'Arrow keys move it. Hold Shift for bigger steps.';
+  return kind === 'own'
+    ? `This card's own focal point on ${fileName}. Moving it changes only this card. ${keys}`
+    : `Focal point of ${fileName}, shared with this photo's other cards. ${keys}`;
+}
+
+/** The same in a sentence shown under the photo: what moving the marker will change. */
+export function focalKindText(kind: FocalKind): string {
+  return kind === 'own'
+    ? 'This card has its own focal point. Moving it changes only this card.'
+    : "This card uses the photo's focal point. Moving it changes every card from this photo that shares it.";
 }
 
 /** Where the focal point is, in words. */

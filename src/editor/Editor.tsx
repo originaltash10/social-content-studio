@@ -5,10 +5,19 @@
  * What it writes, and when. Opening the editor writes nothing: a stored crop that is smaller
  * than the editor allows is enlarged for display only. The card is changed with one
  * `updateCard` when a drag is released with a different crop, when an arrow key moves the
- * crop or plus or minus resizes it, and when Reset crop is pressed. Moving the focal point is
- * one `setAssetFocal`, on release or per arrow key: it moves the point and re-centres every
- * card of this photo that is still on its automatic crop, together, as one step. Each of those is one undo step and marks the session as
- * changed, so autosave picks it up. The board then renders and checks the card again.
+ * crop or plus or minus resizes it, and when Reset crop is pressed.
+ *
+ * The focal point. A card uses its photo's focal point, shared with the photo's other cards,
+ * unless it has its own (a duplicate does). Everything here goes by the point the card uses:
+ * where the marker is, whether the crop counts as automatic, Reset crop, and the readout.
+ * Moving the marker, on release or per arrow key, is one change:
+ * - on a card that shares the photo's point, one `setAssetFocal`: it moves the photo's point
+ *   and re-centres every card sharing it that is still on its automatic crop, together;
+ * - on a card with its own point, one `updateCard` of that card alone: its point, and its crop
+ *   if it is on its automatic crop. The photo and every other card are left as they are.
+ *
+ * Each of those is one undo step and marks the session as changed, so autosave picks it up. The
+ * board then renders and checks the card again.
  *
  * Undo. While the editor is open, Ctrl/Cmd-Z belongs to it: it undoes only the changes made
  * here since it opened, one per press, and does nothing once those are used up. The key press
@@ -30,13 +39,15 @@ import {
   scaleCrop,
 } from '../lib/editor/geometry';
 import type { Point } from '../lib/editor/geometry';
-import { recentredCrops } from '../lib/editor/focal';
+import { ownFocalMove, recentredCrops } from '../lib/editor/focal';
 import { getPlacement } from '../lib/platforms';
+import { effectiveFocal } from '../lib/render/focal';
 import { UNDO_LIMIT, useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, ImageEdit, Rect, Size } from '../types';
 import { buttonClass } from '../app/styles';
 import { CropStage } from './CropStage';
-import { cropReadout, focalLabel, focalReadout, stageLabel } from './text';
+import { cropReadout, focalKindText, focalLabel, focalReadout, stageLabel } from './text';
+import type { FocalKind } from './text';
 import { useSourcePhoto } from './useSourcePhoto';
 import type { PhotoLoader } from './useSourcePhoto';
 
@@ -91,7 +102,11 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
   const limits = cropLimits(source, target);
   // For display only: never written back unless the user changes the crop.
   const shown = constrainCrop(card.edit.crop, source, target);
-  const automatic = isAutomaticCrop(card.edit.crop, source, target, asset.focal);
+  // The point this card uses: its own if it has one, or else the photo's.
+  const own = card.focal;
+  const focal = effectiveFocal(card, asset);
+  const kind: FocalKind = own ? 'own' : 'shared';
+  const automatic = isAutomaticCrop(card.edit.crop, source, target, focal);
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -118,11 +133,21 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
   }
 
   /** Moves the focal point: one store change and one undo step, or nothing if it is the same. */
-  function writeFocal(focal: Point) {
+  function writeFocal(next: Point) {
     const store = useSessionStore.getState();
     const before = store.revision;
-    const crops = recentredCrops(store.session?.cards ?? [], asset, focal, targetOf);
-    store.setAssetFocal(asset.id, focal, crops);
+    if (own) {
+      // The card's own point: this card only, never the photo or its other cards.
+      const move = ownFocalMove({ focal: own, edit: card.edit }, source, target, next);
+      if (!move) return;
+      store.updateCard(card.id, (draft) => {
+        draft.focal = move.focal;
+        if (move.crop && isImageEdit(draft.edit)) draft.edit.crop = move.crop;
+      });
+    } else {
+      const crops = recentredCrops(store.session?.cards ?? [], asset, next, targetOf);
+      store.setAssetFocal(asset.id, next, crops);
+    }
     if (useSessionStore.getState().revision !== before) {
       steps.current = Math.min(steps.current + 1, UNDO_LIMIT);
     }
@@ -135,7 +160,7 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
     const move = arrowDelta(event.key, event.shiftKey);
     if (!move) return;
     event.preventDefault();
-    writeFocal(movePoint(asset.focal, move.dx, move.dy));
+    writeFocal(movePoint(focal, move.dx, move.dy));
   }
 
   function onStageKeyDown(event: KeyboardEvent<HTMLDivElement>) {
@@ -175,10 +200,10 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
         label={stageLabel(asset.fileName)}
         describedBy={readoutId}
         onKeyDown={onStageKeyDown}
-        focal={asset.focal}
-        cropFor={(focal) => (automatic ? automaticCrop(source, target, focal) : shown)}
+        focal={focal}
+        cropFor={(point) => (automatic ? automaticCrop(source, target, point) : shown)}
         onFocalCommit={writeFocal}
-        focalLabel={focalLabel(asset.fileName)}
+        focalLabel={focalLabel(asset.fileName, kind)}
         focalDescribedBy={focalReadoutId}
         onFocalKeyDown={onFocalKeyDown}
       />
@@ -186,7 +211,10 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
         {cropReadout(shown)}
       </p>
       <p id={focalReadoutId} aria-live="polite" className="text-label text-ink-secondary">
-        {focalReadout(asset.focal)}
+        {focalReadout(focal)}
+      </p>
+      <p data-testid="focal-kind" className="text-label text-ink-secondary">
+        {focalKindText(kind)}
       </p>
       <p className="text-label text-muted-text">{HELP_TEXT}</p>
       <div>
@@ -194,7 +222,7 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
           type="button"
           className={buttonClass}
           disabled={automatic}
-          onClick={() => write(automaticCrop(source, target, asset.focal))}
+          onClick={() => write(automaticCrop(source, target, focal))}
         >
           Reset crop
         </button>
