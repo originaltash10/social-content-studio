@@ -26,7 +26,8 @@ export type Recrop = { cardId: string; crop: Rect };
  * The new crops for a move of `asset`'s focal point to `focal`: one for each single-photo card
  * of this photo that shares the photo's point, is still on its automatic crop, and whose crop
  * the move actually changes. A card with its own focal point is never listed, even when its
- * crop happens to equal the automatic one. `targetOf` gives a card's output size, or undefined when its placement is not known.
+ * crop happens to equal the automatic one. `targetOf` gives a card's output size, or undefined
+ * when its placement is not known.
  */
 export function recentredCrops(
   cards: readonly Card[],
