@@ -2,6 +2,10 @@
  * One card in the board's dialog: the editor for its crop (or, for a card that cannot be edited,
  * its preview), with the file, the version and every check in full. The editor sits beside the
  * details on a wide screen and above them on a narrow one.
+ *
+ * A card whose latest result is Fail also shows the export override (SPEC.md: "Fail blocks
+ * export unless overridden"). It stays visible while the override is ticked, so it can always be
+ * unticked, even after the card stops failing.
  */
 
 import type { ReactNode } from 'react';
@@ -18,8 +22,9 @@ import {
   resultOf,
   upscaledNote,
 } from '../lib/board/view';
+import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
-import { resultTextClass } from '../app/styles';
+import { focusClass, resultTextClass } from '../app/styles';
 import { ResultBadge } from './ResultBadge';
 
 export type CardDetailsProps = {
@@ -32,6 +37,10 @@ export type CardDetailsProps = {
   /** The editor for this card. Without one, the rendered preview is shown instead. */
   editor?: ReactNode;
 };
+
+export const OVERRIDE_LABEL = 'Export this card even though it fails its checks';
+export const OVERRIDE_NOT_NEEDED =
+  "This card no longer fails its checks, so the override isn't needed.";
 
 export const NOT_RENDERED_NOTE =
   'The file has not been made yet, so these checks use the planned size, and the file size is not checked.';
@@ -102,6 +111,29 @@ export function CardDetails({
               </ul>
             )}
           </section>
+
+          {(card.validation.level === 'fail' || card.overrideFail) && (
+            <section aria-label="Export override" className="flex flex-col gap-1">
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className={`mt-1 accent-accent ${focusClass}`}
+                  checked={card.overrideFail}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    // One change, so one undo step.
+                    useSessionStore.getState().updateCard(card.id, (draft) => {
+                      draft.overrideFail = checked;
+                    });
+                  }}
+                />
+                {OVERRIDE_LABEL}
+              </label>
+              {card.validation.level !== 'fail' && (
+                <p className="text-ink-secondary">{OVERRIDE_NOT_NEEDED}</p>
+              )}
+            </section>
+          )}
 
           {editor !== undefined && (
             <section aria-label="Rendered file" className="flex flex-col gap-2">

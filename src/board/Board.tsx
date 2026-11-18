@@ -51,6 +51,8 @@ export type BoardProps = {
   onController?: (controller: RenderController | null) => void;
   /** Opens a photo for the editor. Tests pass a fake. */
   loadPhoto?: PhotoLoader;
+  /** Hears whether any card's preview is waiting or being made, whenever that changes. */
+  onBusyChange?: (busy: boolean) => void;
 };
 
 const EMPTY: ReadonlyMap<string, CardRender> = new Map();
@@ -81,6 +83,7 @@ export function Board({
   createClient = createImageWorkerClient,
   onController,
   loadPhoto,
+  onBusyChange,
 }: BoardProps) {
   const session = useSessionStore((state) => state.session);
   const missingAssetIds = useSessionStore((state) => state.missingAssetIds);
@@ -139,6 +142,10 @@ export function Board({
   const groups = groupCards(assets, cards, renders, filters);
   const counts = platformCounts(cards);
   const pendingCount = cards.filter((card) => isPending(renders.get(card.id))).length;
+  const busy = pendingCount > 0;
+  useEffect(() => {
+    onBusyChange?.(busy);
+  }, [onBusyChange, busy]);
   const openCard = cards.find((card) => card.id === openId);
   const openAsset = assets.find((asset) => asset.id === openCard?.assetIds[0]);
 
