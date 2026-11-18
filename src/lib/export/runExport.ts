@@ -42,7 +42,7 @@ export type ExportSink = {
   /** True when files already written stay put if the run stops early (a folder, not a zip). */
   keepsPartial: boolean;
   /** Writes one file at `path` ("{platform}/{file name}"). Rejects with a reason on failure. */
-  write(path: string, bytes: Uint8Array): Promise<void>;
+  write(path: string, bytes: Uint8Array<ArrayBuffer>): Promise<void>;
   /** Called at most once, at the end, with captions.csv. Writes it, or builds and hands over the zip. */
   finish(csv: string): Promise<void>;
   /** Called instead of `finish` when the run ends without handing anything over. */
@@ -225,7 +225,7 @@ export async function runExport(deps: ExportDeps): Promise<ExportReport> {
       jobId = null;
     }
 
-    let bytes: Uint8Array;
+    let bytes: Uint8Array<ArrayBuffer>;
     try {
       bytes = stripMetadata(new Uint8Array(await result.blob.arrayBuffer()), result.format);
     } catch (error) {
