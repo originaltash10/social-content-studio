@@ -13,7 +13,8 @@
  * check made on that file at export time.
  */
 
-import type { Card, ValidationLevel } from '../../types';
+import type { Card } from '../../types';
+import type { ExportedResult } from './eligibility';
 
 /** The column names, in order. */
 export const CAPTION_COLUMNS = [
@@ -35,9 +36,12 @@ const CRLF = '\r\n';
 export type CaptionRow = {
   /** The exported file, relative to exports/ or the top of the zip, e.g. "instagram/x.jpg". */
   path: string;
-  card: Pick<Card, 'platform' | 'placement' | 'copy' | 'overrideFail'>;
-  /** The result of checking the exported file. */
-  result: ValidationLevel;
+  card: Pick<Card, 'platform' | 'placement' | 'copy'>;
+  /**
+   * The result of checking the exported file. A file that fails without an override is never
+   * exported, so there is no row, and no wording, for it.
+   */
+  result: ExportedResult;
 };
 
 /**
@@ -53,11 +57,15 @@ export function hashtagCell(hashtags: readonly string[]): string {
     .join(' ');
 }
 
-/** The result in words. A failing file is only exported when the card is overridden. */
-export function resultCell(result: ValidationLevel, overrideFail: boolean): string {
-  if (result === 'pass') return 'Pass';
-  if (result === 'warn') return 'Warning';
-  return overrideFail ? 'Fail, exported with override' : 'Fail';
+const RESULT_TEXT: Record<ExportedResult, string> = {
+  pass: 'Pass',
+  warn: 'Warning',
+  override: 'Fail, exported with override',
+};
+
+/** The result in words. */
+export function resultCell(result: ExportedResult): string {
+  return RESULT_TEXT[result];
 }
 
 /** One field in double quotes, with any double quote inside it doubled. */
@@ -84,7 +92,7 @@ export function captionsCsv(rows: readonly CaptionRow[]): string {
           hashtagCell(card.copy.hashtags),
           card.copy.firstComment,
           card.copy.altText,
-          resultCell(result, card.overrideFail),
+          resultCell(result),
         ]),
       )
       .join('')

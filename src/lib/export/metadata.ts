@@ -57,7 +57,7 @@ function ascii(bytes: Uint8Array, start: number, end: number): string {
   return String.fromCharCode(...bytes.subarray(start, Math.min(end, bytes.length)));
 }
 
-function concat(parts: readonly Uint8Array[]): Uint8Array {
+function concat(parts: readonly Uint8Array[]): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0;
   for (const part of parts) {
@@ -303,7 +303,7 @@ export function findMetadata(bytes: Uint8Array): string[] {
  * Returns a copy of the file with all hidden information removed (see the top of this file).
  * Throws a MetadataError if the file is not a `format` file or cannot be read with certainty.
  */
-export function stripMetadata(bytes: Uint8Array, format: OutputFormat): Uint8Array {
+export function stripMetadata(bytes: Uint8Array, format: OutputFormat): Uint8Array<ArrayBuffer> {
   if (detectFormat(bytes) !== format) throw notFormatError(format);
   return concat(sort(bytes, format).kept);
 }

@@ -18,7 +18,6 @@ function card(overrides: CardOverrides = {}): RowCard {
   return {
     platform: 'instagram',
     placement: 'feed-vertical',
-    overrideFail: false,
     ...rest,
     copy: { caption: '', firstComment: '', hashtags: [], altText: '', ...copy },
   };
@@ -156,13 +155,11 @@ describe('hashtagCell', () => {
 
 describe('resultCell', () => {
   it.each([
-    ['pass', false, 'Pass'],
-    ['warn', false, 'Warning'],
-    ['warn', true, 'Warning'],
-    ['fail', true, 'Fail, exported with override'],
-    ['fail', false, 'Fail'],
-  ] as const)('says %s (override %s) as %j', (result, override, expected) => {
-    expect(resultCell(result, override)).toBe(expected);
+    ['pass', 'Pass'],
+    ['warn', 'Warning'],
+    ['override', 'Fail, exported with override'],
+  ] as const)('says %s as %j', (result, expected) => {
+    expect(resultCell(result)).toBe(expected);
   });
 });
 
