@@ -16,7 +16,7 @@ import {
   makeSession,
   withInjectedKeys,
 } from '../../test/fixtures';
-import type { BrandKit, Session } from '../../types';
+import type { BrandKit, Card, Session } from '../../types';
 
 /** The i-th entry of a raw JSON list, as an object. */
 function item(list: unknown, i: number): Record<string, unknown> {
@@ -192,6 +192,74 @@ describe('session.json', () => {
       item(r.assets, 0).focal = { x: 'left', y: 0.5 };
     });
     expect(() => parseSession(text)).toThrow('session.assets[0].focal.x must be a finite number');
+  });
+
+  it("round-trips a card's own focal point", () => {
+    const session = makeSession({ cards: [makeCard({ focal: { x: 0.25, y: 0.75 } })] });
+    const text = serializeSession(session);
+    expect(item((JSON.parse(text) as Session).cards, 0).focal).toEqual({ x: 0.25, y: 0.75 });
+    expect(parseSession(text)).toEqual(session);
+  });
+
+  it("writes no focal point for a card that shares its photo's", () => {
+    const session = makeSession({
+      cards: [makeCard(), makeCard({ id: 'card-2', focal: undefined })],
+    });
+    const raw = JSON.parse(serializeSession(session)) as Session;
+    expect(Object.hasOwn(item(raw.cards, 0), 'focal')).toBe(false);
+    expect(Object.hasOwn(item(raw.cards, 1), 'focal')).toBe(false);
+    expect(Object.hasOwn(item(parseSession(serializeSession(session)).cards, 1), 'focal')).toBe(
+      false,
+    );
+  });
+
+  it('loads an older file, whose cards have no focal point, exactly as before', () => {
+    const session = makeSession();
+    // The text of a file written before cards could have their own focal point.
+    const older = JSON.stringify(session);
+    for (const card of (JSON.parse(older) as Session).cards) {
+      expect(Object.hasOwn(card, 'focal')).toBe(false);
+    }
+    const loaded = parseSession(older);
+    expect(loaded).toEqual(session);
+    for (const card of loaded.cards) expect(Object.hasOwn(card, 'focal')).toBe(false);
+    // Saving it again writes the same file the serializer always wrote for it.
+    expect(serializeSession(loaded)).toBe(serializeSession(session));
+  });
+
+  it("moves a card's own focal point outside the photo to its edge, on load and on save", () => {
+    const outside = tamper(serializeSession(makeSession()), (r) => {
+      item(r.cards, 0).focal = { x: 3, y: -0.5 };
+    });
+    expect(parseSession(outside).cards[0]?.focal).toEqual({ x: 1, y: 0 });
+    const saved = serializeSession(
+      makeSession({ cards: [makeCard({ focal: { x: -2, y: 1.5 } })] }),
+    );
+    expect((JSON.parse(saved) as Session).cards[0]?.focal).toEqual({ x: 0, y: 1 });
+  });
+
+  it.each<[string, unknown, string]>([
+    ['a coordinate that is not a number', { x: 'left', y: 0.5 }, 'focal.x must be a finite number'],
+    ['a missing coordinate', { x: 0.5 }, 'focal.y must be a finite number'],
+    ['a value that is not an object', 'centre', 'focal must be an object'],
+    ['null', null, 'focal must be an object'],
+  ])("rejects a card's own focal point with %s", (_name, focal, message) => {
+    const text = tamper(serializeSession(makeSession()), (r) => {
+      item(r.cards, 0).focal = focal;
+    });
+    expect(() => parseSession(text)).toThrow(SessionFormatError);
+    expect(() => parseSession(text)).toThrow(`session.cards[0].${message}`);
+  });
+
+  it("keeps only x and y of a card's own focal point", () => {
+    const text = tamper(serializeSession(makeSession()), (r) => {
+      item(r.cards, 0).focal = { x: 0.3, y: 0.6, apiKey: SECRET, z: 1 };
+    });
+    expect(parseSession(text).cards[0]?.focal).toEqual({ x: 0.3, y: 0.6 });
+    const leaky = makeSession({
+      cards: [makeCard({ focal: { x: 0.3, y: 0.6, apiKey: SECRET } as Card['focal'] })],
+    });
+    expect(serializeSession(leaky)).not.toContain(SECRET);
   });
 
   it('refuses to write a session whose shape is wrong', () => {

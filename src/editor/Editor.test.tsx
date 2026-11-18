@@ -16,7 +16,7 @@ import { hash, makeAsset } from '../test/fixtures';
 import type { Card, ImageEdit, PlacementSpec, Rect, Size } from '../types';
 import { HANDLE_TARGET } from './CropStage';
 import { Editor, HELP_TEXT, LOADING_TEXT } from './Editor';
-import { cropReadout, focalLabel, focalReadout, stageLabel } from './text';
+import { cropReadout, focalKindText, focalLabel, focalReadout, stageLabel } from './text';
 
 // Sizes come from the platform data, never from this file.
 const FEED = getPlacement('instagram', 'feed-vertical') as PlacementSpec;
@@ -85,10 +85,10 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** Shows the editor for the first card, following the store as the board does. */
-function Host({ missing = false }) {
+/** Shows the editor for one card (the first unless told), following the store as the board does. */
+function Host({ missing = false, index = 0 }) {
   const blob = missing ? undefined : BLOB;
-  const first = useSessionStore((state) => state.session?.cards[0]);
+  const first = useSessionStore((state) => state.session?.cards[index]);
   const asset = useSessionStore((state) => state.session?.assets[0]);
   if (!first || !asset) return null;
   return (
@@ -605,9 +605,14 @@ describe('the focal point', () => {
     expect(marker().tagName).toBe('BUTTON');
     expect(marker()).not.toHaveAttribute('tabindex', '-1');
     expect(marker()).toHaveAccessibleName(
-      'Focal point of site.jpg. Arrow keys move it. Hold Shift for bigger steps.',
+      "Focal point of site.jpg, shared with this photo's other cards. Arrow keys move it. Hold Shift for bigger steps.",
     );
-    expect(focalLabel('site.jpg')).toBe(marker().getAttribute('aria-label'));
+    expect(focalLabel('site.jpg', 'shared')).toBe(marker().getAttribute('aria-label'));
+    // The same in plain words, in view near the marker's readout.
+    expect(screen.getByTestId('focal-kind')).toHaveTextContent(
+      "This card uses the photo's focal point. Moving it changes every card from this photo that shares it.",
+    );
+    expect(focalKindText('shared')).toBe(screen.getByTestId('focal-kind').textContent);
     expect(marker()).toHaveAccessibleDescription(focalReadout({ x: 0.5, y: 0.5 }));
     expect(marker().className).toContain('focus-visible:outline-accent');
     expect(marker().className).toContain('touch-none');
@@ -799,5 +804,243 @@ describe('the focal point', () => {
     fireEvent.keyDown(marker(), { key: 'ArrowLeft', metaKey: true });
     fireEvent.keyDown(marker(), { key: 'ArrowLeft', altKey: true });
     expectUntouched(before);
+  });
+});
+
+describe('a card with its own focal point', () => {
+  const SQUARE = getPlacement('linkedin', 'image-square') as PlacementSpec;
+  const marker = () => screen.getByTestId('focal-marker');
+  const photoFocal = () => store().session?.assets[0]?.focal;
+  const cardAt = (index: number) => store().session?.cards[index] as Card & { edit: ImageEdit };
+  /** The duplicate: it sits right after its source, the first card. */
+  const duplicate = () => cardAt(1);
+  const undo = () => fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+  const resetButton = () => screen.getByRole('button', { name: 'Reset crop' });
+  /** Drags the marker from one point on the photo to another and lets go. */
+  function dragMarker(from: [number, number], to: [number, number]) {
+    fireEvent.pointerDown(marker(), pointer(at(...from)));
+    fireEvent.pointerMove(marker(), pointer(at(...to)));
+    fireEvent.pointerUp(marker(), pointer(at(...to)));
+  }
+  /** Everything but the duplicate: the photo, the source card and its sibling. */
+  const others = () => ({
+    assets: store().session?.assets,
+    source: cardAt(0),
+    sibling: cardAt(2),
+  });
+  function expectOthersUntouched(before: ReturnType<typeof others>) {
+    expect(store().session?.assets).toBe(before.assets);
+    expect(cardAt(0)).toBe(before.source);
+    expect(cardAt(2)).toBe(before.sibling);
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+  }
+
+  // The source card, its duplicate, and a sibling in another shape: all on automatic crops.
+  beforeEach(() => {
+    act(() => {
+      store().addCard(draftCard(PHOTO, SQUARE));
+      store().duplicateCard(card().id);
+    });
+    expect(store().session?.cards.map((c) => c.placement)).toEqual([
+      FEED.placement,
+      FEED.placement,
+      SQUARE.placement,
+    ]);
+    expect(duplicate().focal).toEqual({ x: 0.5, y: 0.5 });
+    expect(Object.hasOwn(cardAt(0), 'focal')).toBe(false);
+  });
+
+  /** Gives the duplicate a point of its own away from the photo's, with the crop given. */
+  function setOwn(focal: { x: number; y: number }, cropFor = focal) {
+    act(() => {
+      store().updateCard(duplicate().id, (draft) => {
+        draft.focal = focal;
+        (draft.edit as ImageEdit).crop = automaticCrop(SOURCE, TARGET, cropFor);
+      });
+    });
+  }
+
+  it('says in the label and in view that the point is its own', async () => {
+    await openEditor(<Host index={1} />);
+    expect(marker()).toHaveAccessibleName(
+      "This card's own focal point on site.jpg. Moving it changes only this card. Arrow keys move it. Hold Shift for bigger steps.",
+    );
+    expect(focalLabel('site.jpg', 'own')).toBe(marker().getAttribute('aria-label'));
+    expect(screen.getByTestId('focal-kind')).toHaveTextContent(
+      'This card has its own focal point. Moving it changes only this card.',
+    );
+    expect(focalKindText('own')).toBe(screen.getByTestId('focal-kind').textContent);
+  });
+
+  it('says the point is shared on the source card, which the duplicate did not change', async () => {
+    await openEditor(<Host index={0} />);
+    expect(marker().getAttribute('aria-label')).toBe(focalLabel('site.jpg', 'shared'));
+    expect(screen.getByTestId('focal-kind')).toHaveTextContent(focalKindText('shared'));
+  });
+
+  it("shows the marker and the readout at the card's own point, not the photo's", async () => {
+    setOwn({ x: 0.3, y: 0.8 });
+    await openEditor(<Host index={1} />);
+    expect(marker().style.left).toBe('calc(30% - 22px)');
+    expect(marker().style.top).toBe('calc(80% - 22px)');
+    expect(screen.getByText(focalReadout({ x: 0.3, y: 0.8 }))).toBeInTheDocument();
+    expect(marker()).toHaveAccessibleDescription(focalReadout({ x: 0.3, y: 0.8 }));
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('writes nothing when it opens and closes, or when the marker is pressed in place', async () => {
+    setOwn({ x: 0.3, y: 0.8 });
+    const before = snapshot();
+    const { unmount } = await openEditor(<Host index={1} />);
+    fireEvent.pointerDown(marker(), pointer(at(0.3, 0.8)));
+    fireEvent.pointerUp(marker(), pointer(at(0.3, 0.8)));
+    unmount();
+    expectUntouched(before);
+  });
+
+  it('moves only this card: one card change on release, and nothing for the photo', async () => {
+    await openEditor(<Host index={1} />);
+    const before = snapshot();
+    const rest = others();
+    const duplicateBefore = duplicate();
+
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.4, 0.3)));
+    // The marker and the automatic crop follow on screen; the store is untouched.
+    expect(parseFloat(marker().style.left.slice(5))).toBeCloseTo(40, 8);
+    expect(parseFloat(rect().style.left)).toBeCloseTo(10, 8);
+    expectUntouched(before);
+    fireEvent.pointerUp(marker(), pointer(at(0.4, 0.3)));
+
+    expect(duplicate().focal?.x).toBeCloseTo(0.4, 10);
+    expect(duplicate().focal?.y).toBeCloseTo(0.3, 10);
+    expectCrop(duplicate().edit.crop, automaticCrop(SOURCE, TARGET, { x: 0.4, y: 0.3 }));
+    // Exactly one store change, and it is an ordinary change to this one card: the undo entry
+    // is the card as it was. A move of the photo's point would have left a different entry.
+    expect(store().revision).toBe(before.revision + 1);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    expect(store().undoStack.at(-1)).toEqual({ cardId: duplicate().id, before: duplicateBefore });
+    expect(store().dirty).toBe(true);
+    expectOthersUntouched(rest);
+  });
+
+  it('reverses the move with one Ctrl-Z: the point and the crop come back together', async () => {
+    await openEditor(<Host index={1} />);
+    const before = snapshot();
+    const rest = others();
+    const duplicateBefore = duplicate();
+    dragMarker([0.5, 0.5], [0.2, 0.5]);
+    expect(duplicate().focal?.x).toBeCloseTo(0.2, 10);
+    expect(duplicate().edit.crop.x).not.toBeCloseTo(duplicateBefore.edit.crop.x, 6);
+
+    undo();
+    expect(duplicate()).toBe(duplicateBefore);
+    expect(store().undoStack).toHaveLength(before.undo);
+    expectOthersUntouched(rest);
+    expect(marker().style.left).toBe('calc(50% - 22px)');
+    // Nothing more of the editor's to undo: the duplicate itself is not removed.
+    undo();
+    expect(store().session?.cards).toHaveLength(3);
+  });
+
+  it('moves the point but not a crop adjusted by hand', async () => {
+    await openEditor(<Host index={1} />);
+    fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    const adjusted = duplicate().edit.crop;
+    const rest = others();
+    const steps = store().undoStack.length;
+
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.2, 0.5)));
+    // The hand-adjusted crop does not follow the marker.
+    expect(parseFloat(rect().style.left)).toBeCloseTo(adjusted.x * 100, 8);
+    fireEvent.pointerUp(marker(), pointer(at(0.2, 0.5)));
+
+    expect(duplicate().focal?.x).toBeCloseTo(0.2, 10);
+    expect(duplicate().edit.crop).toEqual(adjusted);
+    expect(store().undoStack).toHaveLength(steps + 1);
+    expectOthersUntouched(rest);
+  });
+
+  it("judges the automatic crop by the card's own point, and Reset crop returns to it", async () => {
+    // The crop the photo's point gives, but the card's own point is elsewhere: adjusted by hand.
+    setOwn({ x: 0.2, y: 0.5 }, { x: 0.5, y: 0.5 });
+    await openEditor(<Host index={1} />);
+    expectCrop(duplicate().edit.crop, AUTO);
+    expect(resetButton()).toBeEnabled();
+    // So the crop does not follow the marker.
+    fireEvent.pointerDown(marker(), pointer(at(0.2, 0.5)));
+    fireEvent.pointerMove(marker(), pointer(at(0.3, 0.5)));
+    expect(parseFloat(rect().style.left)).toBeCloseTo(AUTO.x * 100, 8);
+    fireEvent.pointerCancel(marker(), pointer());
+
+    const rest = others();
+    fireEvent.click(resetButton());
+    expectCrop(duplicate().edit.crop, automaticCrop(SOURCE, TARGET, { x: 0.2, y: 0.5 }));
+    expect(duplicate().focal).toEqual({ x: 0.2, y: 0.5 });
+    expect(resetButton()).toBeDisabled();
+    expectOthersUntouched(rest);
+  });
+
+  it('moves one step for each arrow key press, one change each, and one undo each', async () => {
+    await openEditor(<Host index={1} />);
+    const before = snapshot();
+    const rest = others();
+    fireEvent.keyDown(marker(), { key: 'ArrowLeft' });
+    expect(duplicate().focal?.x).toBeCloseTo(0.49, 10);
+    expect(duplicate().edit.crop.x).toBeCloseTo(0.19, 10);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    fireEvent.keyDown(marker(), { key: 'ArrowDown', shiftKey: true });
+    expect(duplicate().focal?.y).toBeCloseTo(0.6, 10);
+    expect(store().undoStack).toHaveLength(before.undo + 2);
+    expect(screen.getByText(focalReadout({ x: 0.49, y: 0.6 }))).toBeInTheDocument();
+    expectOthersUntouched(rest);
+
+    undo();
+    expect(duplicate().focal?.y).toBeCloseTo(0.5, 10);
+    undo();
+    expect(duplicate().focal).toEqual({ x: 0.5, y: 0.5 });
+    expectCrop(duplicate().edit.crop, AUTO);
+    expect(store().undoStack).toHaveLength(before.undo);
+  });
+
+  it('writes nothing when the point has nowhere to go', async () => {
+    setOwn({ x: 1, y: 1 });
+    await openEditor(<Host index={1} />);
+    const before = snapshot();
+    fireEvent.keyDown(marker(), { key: 'ArrowRight' });
+    fireEvent.keyDown(marker(), { key: 'ArrowDown', shiftKey: true });
+    dragMarker([1, 1], [3, 4]);
+    expectUntouched(before);
+    // And an undo here has nothing of the editor's to reverse.
+    undo();
+    expectUntouched(before);
+  });
+
+  it('stops at the edge of the photo', async () => {
+    await openEditor(<Host index={1} />);
+    dragMarker([0.5, 0.5], [4, -3]);
+    expect(duplicate().focal).toEqual({ x: 1, y: 0 });
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it("is left alone by a move of the photo's point on its source, and by the undo of it", async () => {
+    await openEditor(<Host index={0} />);
+    const duplicateBefore = duplicate();
+    const before = snapshot();
+    dragMarker([0.5, 0.5], [0.2, 0.5]);
+    const moved = { x: 0.2, y: 0.5 };
+    expect(photoFocal()?.x).toBeCloseTo(0.2, 10);
+    // The source and its sibling are re-centred; the duplicate, on the same crop, is not.
+    expectCrop(cardAt(0).edit.crop, automaticCrop(SOURCE, TARGET, moved));
+    expectCrop(cardAt(2).edit.crop, automaticCrop(SOURCE, SQUARE.sizes[0] as Size, moved));
+    expect(duplicate()).toBe(duplicateBefore);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+
+    undo();
+    expect(photoFocal()).toEqual({ x: 0.5, y: 0.5 });
+    expectCrop(cardAt(0).edit.crop, AUTO);
+    expect(duplicate()).toBe(duplicateBefore);
+    expect(store().undoStack).toHaveLength(before.undo);
   });
 });

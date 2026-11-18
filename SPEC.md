@@ -43,7 +43,7 @@ Each row is a feature Claude Code should treat as a unit of work. Priority: P1 s
 | --- | --- | --- | --- |
 | Import | Drag-and-drop images and video, HEIC and MOV decoded in browser | P1 | Fall back to a clear "convert first" message if the codec is unsupported |
 | Import | Campaign brief field (topic, audience, CTA, link) | P1 | Fed into every AI prompt |
-| Images | Smart crop with draggable focal point per source image | P1 | One focal point drives all ratios |
+| Images | Smart crop with draggable focal point per source image | P1 | One focal point drives all ratios; a duplicated card gets its own |
 | Images | Resize and export to platform dimensions, JPG and PNG, quality slider | P1 | |
 | Images | Text overlay with brand fonts, colors, alignment, shadow, safe-zone snapping | P1 | |
 | Images | Logo and watermark placement with opacity | P1 | |
@@ -236,7 +236,7 @@ type Asset = {
   fileName: string;
   width: number; height: number;
   durationMs?: number;
-  focal: { x: number; y: number };   // 0..1, drives all crops
+  focal: { x: number; y: number };   // 0..1, drives all crops except for cards with their own focal point
   description?: string;    // AI image description, cached
 };
 
@@ -246,6 +246,7 @@ type Card = {
   platform: 'instagram' | 'linkedin' | 'facebook' | 'x';
   placement: string;       // key into platforms.json
   parentId?: string;       // set when duplicated; gives lineage
+  focal?: { x: number; y: number };   // 0..1; the card's own focal point, set when duplicated; without it the card uses its asset's
   version: number;
   status: 'draft' | 'review' | 'approved';
   edit: ImageEdit | VideoEdit | CarouselEdit;
@@ -262,7 +263,7 @@ type CarouselEdit = { slides: { assetId: string; edit: ImageEdit }[]; coverIndex
 type Provenance = { provider: string; model: string; at: string };
 ```
 
-Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit` and `copy`, sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit` and `copy`, gives the copy its own `focal` (the source card's focal point at that moment), sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
 
 Brand kit (`brand.json`): logos as PNG paths, fonts as uploaded files or Google Fonts names, a color palette, a voice document (plain text, under 500 words), and overlay presets. It is exportable on its own so the marketing team can share one file with the office.
 

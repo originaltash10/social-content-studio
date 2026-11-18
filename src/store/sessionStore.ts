@@ -7,7 +7,8 @@
  * - Assets are immutable once imported: the file and what was read from it never change, and
  *   importing an id that is already present leaves the existing asset untouched. The one thing
  *   that can be set afterwards is the focal point (`setAssetFocal`).
- * - "Duplicating a card copies edit and copy, sets parentId, and increments version."
+ * - "Duplicating a card copies edit and copy, sets parentId, and increments version." The copy
+ *   also gets its own focal point, so moving it later changes that card only.
  * - "every store mutation pushes a snapshot of the affected card ... Fifty levels is enough."
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
  * - A card's validation result is the validator's output, not an edit, so recording it is not
@@ -77,11 +78,17 @@ type SessionActions = {
   /**
    * Moves a photo's focal point and gives the listed cards their new crops, as one change and
    * one undo step. The point is kept inside 0..1. A crop is applied only to a single-photo
-   * card of this photo. Returns false if there is no such asset; a call that would change
+   * card of this photo that shares the photo's focal point: a card with its own focal point is
+   * never re-cropped here. Returns false if there is no such asset; a call that would change
    * nothing is not a change and adds no undo step.
    */
   setAssetFocal: (assetId: string, focal: Asset['focal'], crops?: CardCrop[]) => boolean;
-  /** Duplicates a card as a linked variant and returns the new id, or null if not found. */
+  /**
+   * Duplicates a card as a linked variant and returns the new id, or null if not found. The
+   * copy gets its own focal point: the source card's own, or else its photo's. The source is
+   * not changed. Only a source with no own point and no single photo in the session gives a
+   * copy without one.
+   */
   duplicateCard: (id: string) => string | null;
   /** Reverts the most recent card change. Returns false when there is nothing to undo. */
   undo: () => boolean;
@@ -255,6 +262,7 @@ export const useSessionStore = create<SessionState>()(
         const cardsBefore = session.cards.filter(
           (c) =>
             wanted.has(c.id) &&
+            c.focal === undefined &&
             c.assetIds.length === 1 &&
             c.assetIds[0] === assetId &&
             'format' in c.edit,
@@ -275,8 +283,15 @@ export const useSessionStore = create<SessionState>()(
       },
 
       duplicateCard: (id) => {
-        const source = get().session?.cards.find((c) => c.id === id);
-        if (!source) return null;
+        const session = get().session;
+        const source = session?.cards.find((c) => c.id === id);
+        if (!session || !source) return null;
+        // The copy's own focal point: the source's own, or else its photo's.
+        const asset =
+          source.assetIds.length === 1
+            ? session.assets.find((a) => a.id === source.assetIds[0])
+            : undefined;
+        const focal = source.focal ?? asset?.focal;
         const copy: Card = {
           id: newId(),
           assetIds: [...source.assetIds],
@@ -291,9 +306,10 @@ export const useSessionStore = create<SessionState>()(
           overrideFail: false,
           comments: [],
         };
-        mutate((session, state) => {
-          const at = session.cards.findIndex((c) => c.id === id);
-          session.cards.splice(at + 1, 0, copy);
+        if (focal) copy.focal = { x: focal.x, y: focal.y };
+        mutate((open, state) => {
+          const at = open.cards.findIndex((c) => c.id === id);
+          open.cards.splice(at + 1, 0, copy);
           pushUndo(state, { cardId: copy.id, before: null });
         });
         return copy.id;

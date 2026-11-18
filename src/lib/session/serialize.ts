@@ -136,6 +136,7 @@ const card = object({
   platform: oneOf('instagram', 'linkedin', 'facebook', 'x'),
   placement: string,
   parentId: optional(string),
+  focal: optional(object({ x: unit, y: unit })),
   version: number,
   status: oneOf('draft', 'review', 'approved'),
   edit,

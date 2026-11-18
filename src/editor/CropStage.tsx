@@ -7,9 +7,10 @@
  * is under way the new crop is held here only; `onCommit` is called once, on release, and only
  * if the crop actually changed. A cancelled drag changes nothing.
  *
- * The round marker is the photo's focal point, which every automatic crop is centred on. It is
- * dragged the same way, with one `onFocalCommit` on release. While it is dragged, `cropFor`
- * says what the crop would become, so the crop is seen to follow.
+ * The round marker is the focal point the card uses (the photo's, or the card's own), which its
+ * automatic crop is centred on. It is dragged the same way, with one `onFocalCommit` on
+ * release. While it is dragged, `cropFor` says what the crop would become, so the crop is seen
+ * to follow.
  *
  * Everything is placed in percentages of the photo's frame, so the area can change size with
  * the dialog or the window without the crop changing: a crop is always fractions of the photo.
@@ -35,7 +36,7 @@ export type CropStageProps = {
   /** The id of the text that describes where the crop is. */
   describedBy?: string;
   onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
-  /** The photo's focal point, in fractions of the photo. */
+  /** The focal point the card uses, in fractions of the photo. */
   focal: Point;
   /** The crop to show while the focal point is being dragged to `focal`. */
   cropFor: (focal: Point) => Rect;

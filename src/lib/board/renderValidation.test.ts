@@ -120,6 +120,71 @@ describe('renderedValidation', () => {
   });
 });
 
+describe("rule 7 uses the card's own focal point when it has one", () => {
+  const STORY = getPlacement('instagram', 'story') as PlacementSpec;
+  const storySize = STORY.sizes[0] as { width: number; height: number };
+  // The photo is wider than a Story, so the automatic crop is its full height: a point at the
+  // very top of the photo is at the very top of the frame, and one in the middle is in the middle.
+  const MIDDLE = { x: 0.5, y: 0.5 };
+  const TOP = { x: 0.5, y: 0 };
+  const edit = makeImageEdit({
+    crop: defaultCrop({ ...ASSET, focal: MIDDLE }, STORY),
+    logo: undefined,
+    overlays: [],
+  });
+  const plan = planRender({ asset: ASSET, spec: STORY, edit });
+  const file = { ...storySize, bytes: 300_000 };
+  const rules = (result: ValidationResult) => result.issues.map((issue) => issue.rule);
+
+  it('has a safe zone to check against, in the platform data', () => {
+    expect(STORY.safeZone).not.toBeNull();
+    expect(edit.crop.height).toBe(1);
+  });
+
+  it("warns for a card whose own point is in the unsafe zone, though the photo's is not", () => {
+    const asset = { ...ASSET, focal: MIDDLE };
+    const shared = { edit, copy: copy() };
+    const own = { edit, copy: copy(), focal: TOP };
+    expect(rules(plannedValidation(shared, asset, STORY))).toEqual([]);
+    expect(rules(renderedValidation(shared, asset, STORY, plan, file))).toEqual([]);
+    expect(rules(plannedValidation(own, asset, STORY))).toEqual([7]);
+    expect(rules(renderedValidation(own, asset, STORY, plan, file))).toEqual([7]);
+    expect(renderedValidation(own, asset, STORY, plan, file).issues[0]?.message).toContain(
+      'focal point',
+    );
+  });
+
+  it("passes a card whose own point is safe, though the photo's is in the unsafe zone", () => {
+    const asset = { ...ASSET, focal: TOP };
+    const shared = { edit, copy: copy() };
+    const own = { edit, copy: copy(), focal: MIDDLE };
+    expect(rules(plannedValidation(shared, asset, STORY))).toEqual([7]);
+    expect(rules(renderedValidation(shared, asset, STORY, plan, file))).toEqual([7]);
+    expect(rules(plannedValidation(own, asset, STORY))).toEqual([]);
+    expect(rules(renderedValidation(own, asset, STORY, plan, file))).toEqual([]);
+  });
+
+  it("gives the validator the card's own point, placed in the frame", () => {
+    const own = { edit, copy: copy(), focal: { x: 0.4, y: 0.25 } };
+    const fields = {
+      caption: 'Hello',
+      hashtags: ['#site'],
+      altText: 'A crane.',
+      overlays: [],
+    };
+    const focal = focalInFrame({ x: 0.4, y: 0.25 }, edit.crop);
+    expect(plannedValidation(own, ASSET, STORY)).toEqual(
+      validate({ kind: 'image', frames: [storySize], focal, ...fields }, STORY),
+    );
+    expect(renderedValidation(own, ASSET, STORY, plan, file)).toEqual(
+      validate(
+        { kind: 'image', frames: [storySize], fileBytes: file.bytes, focal, ...fields },
+        STORY,
+      ),
+    );
+  });
+});
+
 describe('sameResult', () => {
   const a: ValidationResult = {
     level: 'warn',
