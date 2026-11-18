@@ -34,7 +34,9 @@ images as files. What works today:
   placement needs. You can do the same with the keyboard: the arrow keys move the crop, and plus
   and minus resize it (hold Shift for bigger steps). The round marker is the point the photo is
   cropped around. It starts in the middle; move it onto the part of the photo that matters, and
-  every card for that photo that you have not adjusted by hand is cropped around it again.
+  every card for that photo that you have not adjusted by hand is cropped around it again. A
+  duplicated card has its own marker: moving it changes only that card, and moving the photo's
+  marker does not change the duplicate.
   Reset crop puts a card back to that automatic crop, and Ctrl/Cmd-Z reverses your last change.
   Cropping in closely enlarges the picture, so the app stops at twice the size and adds a note
   when a picture has been enlarged.
