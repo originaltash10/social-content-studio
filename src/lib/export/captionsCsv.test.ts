@@ -25,7 +25,7 @@ function card(overrides: CardOverrides = {}): RowCard {
 
 /** A strict RFC 4180 reader for checking the output: every field must be quoted. */
 function parse(csv: string): string[][] {
-  expect(csv.startsWith('﻿')).toBe(true);
+  expect(csv.startsWith('\uFEFF')).toBe(true);
   const rows: string[][] = [];
   let index = 1;
   while (index < csv.length) {
@@ -65,7 +65,7 @@ describe('captionsCsv', () => {
     const csv = captionsCsv([]);
     expect(Array.from(new TextEncoder().encode(csv).subarray(0, 3))).toEqual([0xef, 0xbb, 0xbf]);
     expect(csv).toBe(
-      '﻿"file","platform","placement","caption","hashtags","first_comment","alt_text","result"\r\n',
+      '\uFEFF"file","platform","placement","caption","hashtags","first_comment","alt_text","result"\r\n',
     );
     expect(parse(csv)).toEqual([[...CAPTION_COLUMNS]]);
   });

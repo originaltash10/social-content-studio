@@ -30,7 +30,7 @@ export const CAPTION_COLUMNS = [
 
 export const CSV_MIME = 'text/csv;charset=utf-8';
 
-const BOM = '﻿';
+const BOM = '\uFEFF';
 const CRLF = '\r\n';
 
 export type CaptionRow = {
