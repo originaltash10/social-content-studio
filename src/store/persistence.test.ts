@@ -12,6 +12,7 @@ import {
   autosave,
   currentFolderName,
   downloadBundle,
+  exportFolderFor,
   loadBundle,
   newSession,
   openSessionFolder,
@@ -920,5 +921,71 @@ describe('the previously opened folder is never written by a later session', () 
     expect(status()).toEqual({ kind: 'info', message: 'Started "Second". It is not saved yet.' });
     expect(await reopenLastSession()).toBe(true);
     expect(open()).toEqual(makeSession());
+  });
+});
+
+describe('the folder for an export', () => {
+  it('is null with no open session, and nothing is asked', async () => {
+    expect(await exportFolderFor('session-1')).toBeNull();
+  });
+
+  it('is null for a session that has no folder yet', async () => {
+    newSession('Unsaved');
+    expect(await exportFolderFor(open().id)).toBeNull();
+  });
+
+  it('is null for any session but the open one, and nothing is asked', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const spies = watchFileSystem(dir);
+    expect(await exportFolderFor('another-session')).toBeNull();
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(dir.prompts).toBe(0);
+  });
+
+  it("is the open session's folder when permission is already granted, with no prompt", async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    expect(await exportFolderFor(open().id)).toBe(dir.handle);
+    expect(dir.prompts).toBe(0);
+    expect(dir.log).toEqual([]);
+  });
+
+  it('asks for permission once when it is needed, and gives the folder if it is granted', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    dir.permission = 'prompt';
+    dir.permissionAfterPrompt = 'granted';
+    expect(await exportFolderFor(open().id)).toBe(dir.handle);
+    expect(dir.prompts).toBe(1);
+  });
+
+  it('is null when permission is refused', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    dir.permission = 'prompt';
+    dir.permissionAfterPrompt = 'denied';
+    expect(await exportFolderFor(open().id)).toBeNull();
+    expect(dir.prompts).toBe(1);
+  });
+
+  it('is never the folder of an earlier session', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const earlier = open().id;
+    newSession('Second');
+    expect(await exportFolderFor(open().id)).toBeNull();
+    expect(await exportFolderFor(earlier)).toBeNull();
+    await requestClearSession(() => true);
+    expect(await exportFolderFor(earlier)).toBeNull();
+    expect(dir.prompts).toBe(0);
+  });
+
+  it('writes nothing to the folder', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    dir.permission = 'prompt';
+    await exportFolderFor(open().id);
+    expect(dir.log).toEqual([]);
   });
 });
