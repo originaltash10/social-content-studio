@@ -17,6 +17,10 @@
  * and the focal point; that opening the editor requests no new script; and that every request
  * stays under the app's own address with no failed requests and no console errors.
  *
+ * It then duplicates a card and checks that the duplicate has its own focal point: moving it
+ * changes the duplicate alone, moving the photo's leaves the duplicate alone, one Ctrl-Z
+ * reverses each, and a .scs download and reload keeps the duplicate's own point.
+ *
  * Like e2e/board.check.mjs, it needs Playwright with Chromium already installed on the machine,
  * and is not part of `npm test` or the deploy workflow. Nothing it produces is written inside
  * the repository except the normal `dist` build.
@@ -56,6 +60,8 @@ const PHOTO = 'editor-check.jpg';
 const SOURCE = { width: 4000, height: 3000 };
 const FEED_CARD = `Instagram Feed vertical for ${PHOTO}, v1`;
 const SQUARE_CARD = `LinkedIn Image post square for ${PHOTO}, v1`;
+/** The duplicate of the feed card. */
+const COPY_CARD = `Instagram Feed vertical for ${PHOTO}, v2`;
 
 /** How close a measured position must be to the expected one, as a fraction of the picture. */
 const NEAR = 0.006;
@@ -217,14 +223,20 @@ const describeFile = (file, crop) => {
   );
 };
 
-/** The crop and the focal point the editor is showing, as fractions of the photo. */
+/**
+ * The crop and the focal point the editor is showing, as fractions of the photo, with what the
+ * editor says about whose focal point it is: the marker's label and the line under the photo.
+ */
 function shown(page) {
   return page.evaluate(() => {
     const fraction = (text) => parseFloat(text) / 100;
     const rect = document.querySelector('[data-testid=crop-rect]').style;
-    const marker = document.querySelector('[data-testid=focal-marker]').style;
+    const element = document.querySelector('[data-testid=focal-marker]');
+    const marker = element.style;
     const centre = (text) => parseFloat(text.replace('calc(', '')) / 100;
     return {
+      label: element.getAttribute('aria-label'),
+      kind: document.querySelector('[data-testid=focal-kind]').textContent,
       crop: {
         x: fraction(rect.left),
         y: fraction(rect.top),
@@ -559,7 +571,187 @@ async function runEditor(browser, name, url) {
       `saved focal ${savedFocal.x.toFixed(3)}, ${savedFocal.y.toFixed(3)}; feed crop ${cropText(reopened.crop)}; square crop ${cropText(savedCrop('image-square'))}`,
     );
 
-    // 11. Network and console.
+    // 11. Duplicate the feed card. The copy starts where its source is and has its own point.
+    const sharedPoint = kept.focal;
+    const feedKept = kept.crop;
+    feedSrc = await tileSrc(page, FEED_CARD);
+    squareSrc = await tileSrc(page, SQUARE_CARD);
+    await page.getByRole('button', { name: `Duplicate ${FEED_CARD}`, exact: true }).click();
+    await waitForRendered(page, 3);
+    let copySrc = await tileSrc(page, COPY_CARD);
+    const copyFile = await inspect(page, copySrc);
+    await openEditor(page, FEED_CARD);
+    const sourceSays = await shown(page);
+    await closeEditor(page);
+    await openEditor(page, COPY_CARD);
+    const copyStart = await shown(page);
+    await closeEditor(page);
+    check(
+      'a duplicate starts on the same crop and point as its source, and says the point is its own',
+      sameCrop(copyStart.crop, feedKept) &&
+        near(copyStart.focal.x, sharedPoint.x, 0.002) &&
+        near(copyStart.focal.y, sharedPoint.y, 0.002) &&
+        meets(copyFile, feedKept) &&
+        copyStart.label.startsWith("This card's own focal point on ") &&
+        copyStart.kind.startsWith('This card has its own focal point.') &&
+        sourceSays.label.startsWith('Focal point of ') &&
+        sourceSays.kind.startsWith("This card uses the photo's focal point.") &&
+        // Opening and closing either card wrote nothing: no file was made again.
+        (await tileSrc(page, COPY_CARD)) === copySrc &&
+        (await tileSrc(page, FEED_CARD)) === feedSrc &&
+        (await tileSrc(page, SQUARE_CARD)) === squareSrc,
+      `duplicate: "${copyStart.kind}" source: "${sourceSays.kind}"`,
+    );
+
+    // 12. Move the duplicate's point. Only the duplicate changes.
+    await openEditor(page, COPY_CARD);
+    await drag(page, 'focal-marker', 0.3, 0);
+    copySrc = await checkFile(
+      "moving a duplicate's focal point re-centres the duplicate on its automatic crop",
+      COPY_CARD,
+      FEED,
+      copySrc,
+    );
+    const copyMoved = await shown(page);
+    const othersAfterCopyMove =
+      (await tileSrc(page, FEED_CARD)) === feedSrc &&
+      (await tileSrc(page, SQUARE_CARD)) === squareSrc;
+
+    // 13. One Ctrl-Z reverses that move: the point and the crop together, and nothing else.
+    await page.keyboard.press('Control+z');
+    copySrc = await nextRender(page, COPY_CARD, copySrc);
+    const copyUndone = await shown(page);
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+z');
+    const copyAfterMore = await shown(page);
+    const cardsAfterUndo = await page.locator('article').count();
+    check(
+      "one Ctrl-Z puts back a duplicate's focal point and crop; further presses do nothing",
+      near(copyUndone.focal.x, sharedPoint.x, 0.002) &&
+        sameCrop(copyUndone.crop, feedKept) &&
+        near(copyAfterMore.focal.x, sharedPoint.x, 0.002) &&
+        sameCrop(copyAfterMore.crop, feedKept) &&
+        cardsAfterUndo === 3 &&
+        (await tileSrc(page, FEED_CARD)) === feedSrc &&
+        (await tileSrc(page, SQUARE_CARD)) === squareSrc,
+      `focal x ${copyUndone.focal.x.toFixed(3)}; crop ${cropText(copyUndone.crop)}; ${cardsAfterUndo} cards`,
+    );
+
+    // Move it again and leave it there, then look at the original.
+    await drag(page, 'focal-marker', 0.3, 0);
+    copySrc = await nextRender(page, COPY_CARD, copySrc);
+    const copyKept = await shown(page);
+    await closeEditor(page);
+    await openEditor(page, FEED_CARD);
+    const sourceAfter = await shown(page);
+    check(
+      "moving a duplicate's focal point leaves the original and the photo's other card alone",
+      near(copyMoved.focal.x, sharedPoint.x + 0.3, 0.004) &&
+        sameCrop(copyMoved.crop, automatic(FEED, copyMoved.focal)) &&
+        !sameCrop(copyMoved.crop, feedKept) &&
+        othersAfterCopyMove &&
+        near(sourceAfter.focal.x, sharedPoint.x, 0.002) &&
+        near(sourceAfter.focal.y, sharedPoint.y, 0.002) &&
+        sameCrop(sourceAfter.crop, feedKept) &&
+        (await tileSrc(page, FEED_CARD)) === feedSrc &&
+        (await tileSrc(page, SQUARE_CARD)) === squareSrc,
+      `duplicate focal x ${copyMoved.focal.x.toFixed(3)}, crop ${cropText(copyMoved.crop)}; original focal x ${sourceAfter.focal.x.toFixed(3)}, crop ${cropText(sourceAfter.crop)}; other files ${othersAfterCopyMove ? 'unchanged' : 'made again'}`,
+    );
+
+    // 14. Move the photo's point from the original. The duplicate does not move.
+    await drag(page, 'focal-marker', 0.1, -0.2);
+    feedSrc = await checkFile(
+      "moving the photo's focal point still re-centres the original",
+      FEED_CARD,
+      FEED,
+      feedSrc,
+    );
+    const sourceMoved = await shown(page);
+    const copyAfterSourceMove = (await tileSrc(page, COPY_CARD)) === copySrc;
+
+    // 15. One Ctrl-Z reverses the photo's move; the duplicate is where it was throughout.
+    await page.keyboard.press('Control+z');
+    feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+    const sourceUndone = await shown(page);
+    const copyAfterSourceUndo = (await tileSrc(page, COPY_CARD)) === copySrc;
+    await closeEditor(page);
+    await openEditor(page, COPY_CARD);
+    const copyAfter = await shown(page);
+    await closeEditor(page);
+    check(
+      "moving the photo's focal point leaves the duplicate alone, and so does the Ctrl-Z of it",
+      near(sourceMoved.focal.x, sharedPoint.x + 0.1, 0.004) &&
+        near(sourceMoved.focal.y, sharedPoint.y - 0.2, 0.004) &&
+        sameCrop(sourceMoved.crop, automatic(FEED, sourceMoved.focal)) &&
+        copyAfterSourceMove &&
+        near(sourceUndone.focal.x, sharedPoint.x, 0.002) &&
+        near(sourceUndone.focal.y, sharedPoint.y, 0.002) &&
+        sameCrop(sourceUndone.crop, feedKept) &&
+        copyAfterSourceUndo &&
+        near(copyAfter.focal.x, copyKept.focal.x, 0.002) &&
+        near(copyAfter.focal.y, copyKept.focal.y, 0.002) &&
+        sameCrop(copyAfter.crop, copyKept.crop) &&
+        (await tileSrc(page, SQUARE_CARD)) === squareSrc,
+      `original focal ${sourceMoved.focal.x.toFixed(3)}, ${sourceMoved.focal.y.toFixed(3)} then ${sourceUndone.focal.x.toFixed(3)}, ${sourceUndone.focal.y.toFixed(3)}; duplicate focal x ${copyAfter.focal.x.toFixed(3)}, file ${copyAfterSourceMove && copyAfterSourceUndo ? 'unchanged' : 'made again'}`,
+    );
+
+    // 16. Save and reload: only the duplicate has a point of its own in the file, and it is kept.
+    const [copyDownload] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download .scs' }).click(),
+    ]);
+    const copyBundlePath = join(outDir, `${name}-session-with-duplicate.scs`);
+    await copyDownload.saveAs(copyBundlePath);
+    const copyZip = await JSZip.loadAsync(readFileSync(copyBundlePath));
+    const withCopy = JSON.parse(await copyZip.file('session.json').async('string'));
+    const savedCopy = withCopy.cards.find((c) => c.parentId !== undefined);
+    const savedShared = withCopy.cards.filter((c) => c.parentId === undefined);
+    const savedCopyOk =
+      withCopy.cards.length === 3 &&
+      savedCopy !== undefined &&
+      savedCopy.focal !== undefined &&
+      near(savedCopy.focal.x, copyKept.focal.x, 0.002) &&
+      near(savedCopy.focal.y, copyKept.focal.y, 0.002) &&
+      sameCrop(savedCopy.edit.crop, copyKept.crop) &&
+      savedShared.length === 2 &&
+      savedShared.every((c) => !Object.hasOwn(c, 'focal')) &&
+      near(withCopy.assets[0].focal.x, sharedPoint.x, 0.002) &&
+      near(withCopy.assets[0].focal.y, sharedPoint.y, 0.002);
+
+    await page.getByRole('button', { name: 'Clear session' }).click();
+    await page.getByText('No session is open.').waitFor();
+    await page.getByLabel('Session bundle file').setInputFiles(copyBundlePath);
+    await page
+      .getByRole('status')
+      .filter({ hasText: /^Opened / })
+      .first()
+      .waitFor();
+    await waitForRendered(page, 3);
+    const reloadedCopy = await inspect(page, await tileSrc(page, COPY_CARD));
+    const reloadedSource = await inspect(page, await tileSrc(page, FEED_CARD));
+    await openEditor(page, COPY_CARD);
+    const copyReopened = await shown(page);
+    await closeEditor(page);
+    await openEditor(page, FEED_CARD);
+    const sourceReopened = await shown(page);
+    await closeEditor(page);
+    check(
+      "Download .scs, Clear, Load .scs: the duplicate's own focal point comes back, and only it has one",
+      savedCopyOk &&
+        near(copyReopened.focal.x, copyKept.focal.x, 0.002) &&
+        near(copyReopened.focal.y, copyKept.focal.y, 0.002) &&
+        sameCrop(copyReopened.crop, copyKept.crop) &&
+        copyReopened.kind.startsWith('This card has its own focal point.') &&
+        meets(reloadedCopy, copyKept.crop) &&
+        near(sourceReopened.focal.x, sharedPoint.x, 0.002) &&
+        near(sourceReopened.focal.y, sharedPoint.y, 0.002) &&
+        sameCrop(sourceReopened.crop, feedKept) &&
+        sourceReopened.kind.startsWith("This card uses the photo's focal point.") &&
+        meets(reloadedSource, feedKept),
+      `saved duplicate focal ${savedCopy?.focal ? `${savedCopy.focal.x.toFixed(3)}, ${savedCopy.focal.y.toFixed(3)}` : 'missing'}; cards with their own point in the file: ${withCopy.cards.filter((c) => Object.hasOwn(c, 'focal')).length} of ${withCopy.cards.length}; photo focal ${withCopy.assets[0].focal.x.toFixed(3)}, ${withCopy.assets[0].focal.y.toFixed(3)}`,
+    );
+
+    // 17. Network and console.
     const outside = requests.filter((r) => !r.url.startsWith(url) && !/^(blob|data):/.test(r.url));
     check(
       `every request stays under ${url}`,
