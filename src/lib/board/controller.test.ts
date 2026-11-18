@@ -280,6 +280,97 @@ describe('rendering a card', () => {
   });
 });
 
+describe("rule 7 and a card's own focal point", () => {
+  const STORY = spec('instagram', 'story');
+  // A crop of the photo's full height, so a point's height on the photo is its height in the
+  // frame: the very top is in the unsafe zone, the middle is not.
+  const storyCrop = planRender({ asset: ASSET, spec: STORY }).cropRect;
+  const MIDDLE = { x: 0.5, y: 0.5 };
+  const TOP = { x: 0.5, y: 0 };
+  const story = (id: string, overrides: Partial<Card> = {}) =>
+    card(id, STORY, {
+      edit: { crop: storyCrop, overlays: [], format: 'jpg', quality: 0.9 },
+      ...overrides,
+    });
+  const rules = (result: ValidationResult) => result.issues.map((i) => i.rule);
+  /** The newest result recorded for a card. */
+  function last(id: string): ValidationResult {
+    const found = writtenFor(id).at(-1);
+    if (!found) throw new Error(`no result recorded for ${id}`);
+    return found[1];
+  }
+
+  it('checks each card with the focal point it uses', async () => {
+    expect(STORY.safeZone).not.toBeNull();
+    expect(storyCrop.height).toBe(1);
+    // The photo's point is in the middle; the duplicate's own point is at the very top.
+    controller.sync(session([story('shared'), story('own', { focal: TOP })]));
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    expect(rules(last('shared'))).toEqual([]);
+    expect(rules(last('own'))).toEqual([7]);
+  });
+
+  it('checks a finished card again when its own point moves, without rendering it again', async () => {
+    const own = story('own', { focal: MIDDLE });
+    controller.sync(session([story('shared'), own]));
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    const stored = [
+      story('shared', { validation: last('shared') }),
+      story('own', { focal: MIDDLE, validation: last('own') }),
+    ] as const;
+    expect(rules(last('own'))).toEqual([]);
+    writes.length = 0;
+
+    // The crop was adjusted by hand, so the move changes the point and nothing else.
+    controller.sync(session([stored[0], { ...stored[1], focal: TOP }]));
+    expect(client.render).toHaveBeenCalledTimes(2);
+    expect(writes.map(([id]) => id)).toEqual(['own']);
+    expect(rules(last('own'))).toEqual([7]);
+
+    // Undo puts the point back, with the result recorded for the moved point still on the card.
+    const moved = last('own');
+    writes.length = 0;
+    controller.sync(session([stored[0], { ...stored[1], validation: moved }]));
+    expect(writes.map(([id]) => id)).toEqual(['own']);
+    expect(rules(last('own'))).toEqual([]);
+    expect(client.render).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not check a card with its own point against a move of the photo's point", async () => {
+    controller.sync(session([story('shared'), story('own', { focal: MIDDLE })]));
+    await client.sent(2);
+    finish(0);
+    finish(1);
+    await controller.idle();
+    const stored = [
+      story('shared', { validation: last('shared') }),
+      story('own', { focal: MIDDLE, validation: last('own') }),
+    ];
+    writes.length = 0;
+    controller.sync(session(stored, { assets: [{ ...ASSET, focal: TOP }] }));
+    // Only the card that shares the photo's point is affected.
+    expect(writes.map(([id]) => id)).toEqual(['shared']);
+    expect(rules(last('shared'))).toEqual([7]);
+    expect(client.render).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses the card's own point as it is when the file arrives, not as it was when sent", async () => {
+    controller.sync(session([story('own', { focal: MIDDLE })]));
+    await client.sent(1);
+    controller.sync(session([story('own', { focal: TOP })]));
+    finish(0);
+    await controller.idle();
+    expect(client.render).toHaveBeenCalledTimes(1);
+    expect(rules(last('own'))).toEqual([7]);
+  });
+});
+
 describe('cards that cannot be rendered', () => {
   it('says the original file is missing when it is listed as missing', async () => {
     controller.sync(session([card('c1')], { missingAssetIds: [ASSET.id] }));

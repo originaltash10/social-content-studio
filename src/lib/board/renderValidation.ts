@@ -4,6 +4,7 @@
  */
 
 import { focalInFrame } from '../render/crop';
+import { effectiveFocal } from '../render/focal';
 import { defaultCrop } from '../render/plan';
 import type { RenderPlan } from '../render/plan';
 import { renderValidationFields } from '../render/validation';
@@ -17,7 +18,7 @@ export function isImageEdit(edit: Card['edit']): edit is ImageEdit {
   return 'format' in edit && !('slides' in edit) && !('inMs' in edit);
 }
 
-type CardText = Pick<Card, 'copy' | 'edit'>;
+type CardText = Pick<Card, 'copy' | 'edit' | 'focal'>;
 
 /** The fields every check reads from the card itself: its text, overlays and logo. */
 function cardFields(
@@ -51,7 +52,7 @@ export function plannedValidation(
     {
       kind: 'image',
       frames: [{ width: size.width, height: size.height }],
-      focal: focalInFrame(asset.focal, crop),
+      focal: focalInFrame(effectiveFocal(card, asset), crop),
       ...cardFields(card),
     },
     spec,
@@ -67,7 +68,7 @@ export function renderedValidation(
   rendered: RenderedMeasure,
 ): ValidationResult {
   return validate(
-    { ...renderValidationFields(rendered, plan, asset.focal), ...cardFields(card) },
+    { ...renderValidationFields(rendered, plan, effectiveFocal(card, asset)), ...cardFields(card) },
     spec,
   );
 }
