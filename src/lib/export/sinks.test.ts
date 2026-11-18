@@ -92,7 +92,7 @@ describe('folderSink', () => {
     expect(sink.keepsPartial).toBe(true);
     await sink.write('instagram/a.jpg', BYTES);
     await sink.write('linkedin/b.png', BYTES);
-    await sink.finish('﻿"file"\r\n');
+    await sink.finish('\uFEFF"file"\r\n');
     const exportsDir = dir.dirs.get('exports') as MockDir;
     expect(await bytesOf(exportsDir.dirs.get('instagram')?.files.get('a.jpg') as Blob)).toEqual([
       1, 2, 3, 4,
@@ -191,7 +191,7 @@ describe('zipSink', () => {
     await sink.write('instagram/a.jpg', BYTES);
     await sink.write('linkedin/b.png', new Uint8Array([9, 8]));
     expect(download).not.toHaveBeenCalled();
-    await sink.finish('﻿"file"\r\n');
+    await sink.finish('\uFEFF"file"\r\n');
 
     expect(download).toHaveBeenCalledTimes(1);
     const [blob, name] = download.mock.calls[0] as [Blob, string];
