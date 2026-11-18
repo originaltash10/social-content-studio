@@ -8,7 +8,7 @@ import {
   useSessionStore,
 } from './sessionStore';
 import type { NewCard } from './sessionStore';
-import { hash, makeAsset, makeBrand, makeCard, makeSession } from '../test/fixtures';
+import { hash, makeAsset, makeBrand, makeCard, makeImageEdit, makeSession } from '../test/fixtures';
 import type { Card, Session, ValidationResult } from '../types';
 
 const store = () => useSessionStore.getState();
@@ -115,6 +115,7 @@ describe('actions without an open session', () => {
   it('updateCard, duplicateCard and undo do nothing', () => {
     expect(store().updateCard('nope', () => undefined)).toBe(false);
     expect(store().duplicateCard('nope')).toBeNull();
+    expect(store().setAssetFocal(hash('a'), { x: 0.2, y: 0.2 })).toBe(false);
     expect(store().undo()).toBe(false);
     expect(store().dirty).toBe(false);
   });
@@ -547,6 +548,198 @@ describe('undo', () => {
     expect(undone).toBe(UNDO_LIMIT);
     // The oldest reachable state is the one before update 11, which is "v10".
     expect(cardById(id).copy.caption).toBe('v10');
+  });
+});
+
+describe('setAssetFocal', () => {
+  const PHOTO = hash('a');
+  const OTHER = hash('b');
+  const crop = (x: number) => ({ x, y: 0, width: 0.5, height: 1 });
+  let first: string;
+  let second: string;
+  let untouched: string;
+  let otherPhoto: string;
+  let carousel: string;
+
+  function cropOf(id: string) {
+    return (cardById(id).edit as { crop?: unknown }).crop;
+  }
+  function focalOf(assetId: string) {
+    return open().assets.find((a) => a.id === assetId)?.focal;
+  }
+
+  beforeEach(() => {
+    store().createSession('S');
+    store().addAssets([
+      { asset: makeAsset({ id: PHOTO, focal: { x: 0.5, y: 0.5 } }) },
+      { asset: makeAsset({ id: OTHER, fileName: 'other.jpg', focal: { x: 0.5, y: 0.5 } }) },
+    ]);
+    first = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.25) }) }));
+    second = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.25) }) }));
+    untouched = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.1) }) }));
+    otherPhoto = store().addCard(
+      newCard({ assetIds: [OTHER], edit: makeImageEdit({ crop: crop(0.25) }) }),
+    );
+    carousel = store().addCard(newCard({ edit: { slides: [], coverIndex: 0 } }));
+    save();
+  });
+
+  it('moves the focal point of that photo only', () => {
+    expect(store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 })).toBe(true);
+    expect(focalOf(PHOTO)).toEqual({ x: 0.2, y: 0.7 });
+    expect(focalOf(OTHER)).toEqual({ x: 0.5, y: 0.5 });
+    expect(store().dirty).toBe(true);
+  });
+
+  it('changes nothing else on the asset', () => {
+    const before = open().assets[0];
+    store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 });
+    expect(open().assets[0]).toEqual({ ...before, focal: { x: 0.2, y: 0.7 } });
+  });
+
+  it('keeps the point inside the photo, and puts a point that is not a number in the middle', () => {
+    store().setAssetFocal(PHOTO, { x: 3, y: -1 });
+    expect(focalOf(PHOTO)).toEqual({ x: 1, y: 0 });
+    store().setAssetFocal(PHOTO, { x: Number.NaN, y: Number.POSITIVE_INFINITY });
+    expect(focalOf(PHOTO)).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('gives each listed card its new crop, and leaves the others alone', () => {
+    const before = { untouched: cardById(untouched), other: cardById(otherPhoto) };
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: first, crop: crop(0.5) },
+      { cardId: second, crop: crop(0.45) },
+    ]);
+    expect(cropOf(first)).toEqual(crop(0.5));
+    expect(cropOf(second)).toEqual(crop(0.45));
+    expect(cardById(untouched)).toBe(before.untouched);
+    expect(cardById(otherPhoto)).toBe(before.other);
+  });
+
+  it('changes only the crop on a card it re-crops', () => {
+    const before = cardById(first);
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [{ cardId: first, crop: crop(0.5) }]);
+    expect(cardById(first)).toEqual({ ...before, edit: { ...before.edit, crop: crop(0.5) } });
+  });
+
+  it('does not keep a reference to the crop it was given', () => {
+    const given = crop(0.5);
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [{ cardId: first, crop: given }]);
+    given.x = 0.9;
+    expect(cropOf(first)).toEqual(crop(0.5));
+  });
+
+  it("ignores a crop for another photo's card, a carousel, or a card that is not there", () => {
+    const before = { other: cardById(otherPhoto), carousel: cardById(carousel) };
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: otherPhoto, crop: crop(0.5) },
+      { cardId: carousel, crop: crop(0.5) },
+      { cardId: 'nope', crop: crop(0.5) },
+    ]);
+    expect(cardById(otherPhoto)).toBe(before.other);
+    expect(cardById(carousel)).toBe(before.carousel);
+    expect(focalOf(PHOTO)).toEqual({ x: 0.8, y: 0.5 });
+  });
+
+  it('ignores a crop for a card that uses more than one photo', () => {
+    const pair = store().addCard(
+      newCard({ assetIds: [PHOTO, OTHER], edit: makeImageEdit({ crop: crop(0.25) }) }),
+    );
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [{ cardId: pair, crop: crop(0.5) }]);
+    expect(cropOf(pair)).toEqual(crop(0.25));
+  });
+
+  it('returns false and changes nothing for an unknown asset', () => {
+    const before = store().revision;
+    expect(store().setAssetFocal(hash('f'), { x: 0.2, y: 0.2 })).toBe(false);
+    expect(store().revision).toBe(before);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('is not a change when the point is the same and no card is re-cropped', () => {
+    const steps = store().undoStack.length;
+    const before = store().revision;
+    expect(store().setAssetFocal(PHOTO, { x: 0.5, y: 0.5 })).toBe(true);
+    expect(
+      store().setAssetFocal(PHOTO, { x: 0.5, y: 0.5 }, [{ cardId: 'nope', crop: crop(0) }]),
+    ).toBe(true);
+    expect(store().revision).toBe(before);
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('is a change when only a crop differs', () => {
+    const steps = store().undoStack.length;
+    store().setAssetFocal(PHOTO, { x: 0.5, y: 0.5 }, [{ cardId: first, crop: crop(0.3) }]);
+    expect(cropOf(first)).toEqual(crop(0.3));
+    expect(store().undoStack).toHaveLength(steps + 1);
+  });
+
+  it('is one undo step, however many cards it re-crops', () => {
+    const steps = store().undoStack.length;
+    const before = { session: open(), first: cardById(first), second: cardById(second) };
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: first, crop: crop(0.5) },
+      { cardId: second, crop: crop(0.45) },
+    ]);
+    expect(store().undoStack).toHaveLength(steps + 1);
+
+    expect(store().undo()).toBe(true);
+    expect(focalOf(PHOTO)).toEqual({ x: 0.5, y: 0.5 });
+    expect(cardById(first)).toEqual(before.first);
+    expect(cardById(second)).toEqual(before.second);
+    expect(open().cards).toEqual(before.session.cards);
+    expect(open().assets).toEqual(before.session.assets);
+    expect(store().undoStack).toHaveLength(steps);
+  });
+
+  it('undoes a later edit to one of its cards first, then the focal move', () => {
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [
+      { cardId: first, crop: crop(0.5) },
+      { cardId: second, crop: crop(0.45) },
+    ]);
+    store().updateCard(first, (card) => {
+      (card.edit as { crop: unknown }).crop = crop(0.33);
+      card.copy.caption = 'Edited after the move';
+    });
+
+    // The later edit goes first: the card is as the focal move left it, and the move stands.
+    store().undo();
+    expect(cropOf(first)).toEqual(crop(0.5));
+    expect(cardById(first).copy.caption).toBe(makeCard().copy.caption);
+    expect(cropOf(second)).toEqual(crop(0.45));
+    expect(focalOf(PHOTO)).toEqual({ x: 0.8, y: 0.5 });
+
+    // Then the focal move, with both of its crops.
+    store().undo();
+    expect(cropOf(first)).toEqual(crop(0.25));
+    expect(cropOf(second)).toEqual(crop(0.25));
+    expect(focalOf(PHOTO)).toEqual({ x: 0.5, y: 0.5 });
+  });
+
+  it('neither adds nor removes a card when it is undone', () => {
+    const added = store().addCard(newCard({ edit: makeImageEdit({ crop: crop(0.25) }) }));
+    store().setAssetFocal(PHOTO, { x: 0.8, y: 0.5 }, [{ cardId: first, crop: crop(0.5) }]);
+    const count = open().cards.length;
+    store().undo();
+    // The card added before the move is still there; undoing the move removes nothing.
+    expect(open().cards).toHaveLength(count);
+    expect(cropOf(added)).toEqual(crop(0.25));
+  });
+
+  it(`counts as one of the ${UNDO_LIMIT} undo levels`, () => {
+    for (let i = 1; i <= UNDO_LIMIT + 5; i++) {
+      store().setAssetFocal(PHOTO, { x: i / 100, y: 0.5 }, [
+        { cardId: first, crop: crop(i / 200) },
+      ]);
+    }
+    expect(store().undoStack).toHaveLength(UNDO_LIMIT);
+    let undone = 0;
+    while (store().undo()) undone++;
+    expect(undone).toBe(UNDO_LIMIT);
+    // The oldest reachable state is the one before move 6, which is move 5.
+    expect(focalOf(PHOTO)).toEqual({ x: 0.05, y: 0.5 });
+    expect(cropOf(first)).toEqual(crop(5 / 200));
   });
 });
 

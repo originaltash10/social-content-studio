@@ -8,8 +8,9 @@ Live app: <https://originaltash10.github.io/social-content-studio> (available on
 
 ## Status: early development
 
-The app can now turn a photo into correctly sized images for Instagram and LinkedIn, but it is
-not finished: there is no way yet to save those images as files, and no editor. What works today:
+The app can now turn a photo into correctly sized images for Instagram and LinkedIn, and lets
+you adjust how each one is cropped, but it is not finished: there is no way yet to save those
+images as files. What works today:
 
 - **Sessions.** Create a session, save it, and open it again later. Changes save automatically
   once a session has a folder. Ctrl/Cmd-Z reverses the last change to a card, up to 50 steps
@@ -21,18 +22,28 @@ not finished: there is no way yet to save those images as files, and no editor. 
   and other file types need converting to JPG or PNG first; the panel says so for each file.
 - **The board.** Choose Create cards, pick photos and Instagram or LinkedIn placements (for
   example Instagram Feed vertical or LinkedIn Image post square), and the board makes one card
-  for each. Each card's image is cropped around the middle of the photo and resized to the
-  placement's exact size, with a progress bar while it is made and a Cancel button. Every card
-  is then checked against the platform's rules and shows Pass, Warning or Fail. You can filter
-  the board by platform and by result, open a card to see its image larger with every check in
-  full, duplicate a card, and render a card again. The images are made in your browser and are
-  kept only while the page is open; a reopened session makes them again.
+  for each. Each card's image is cropped around a point on the photo that you can move, and
+  resized to the placement's exact size, with a progress bar while it is made and a Cancel
+  button. Every card is then checked against the platform's rules and shows Pass, Warning or
+  Fail, with the reason on the card. You can filter the board by platform and by result, open a
+  card to adjust its crop and see every check in full, duplicate a card, and render a card
+  again. The images are made in your browser and are kept only while the page is open; a
+  reopened session makes them again.
+- **Adjusting a crop.** Open a card to see the whole photo with the crop drawn over it. Drag the
+  crop to move it, or drag a corner to make it larger or smaller; it always keeps the shape the
+  placement needs. You can do the same with the keyboard: the arrow keys move the crop, and plus
+  and minus resize it (hold Shift for bigger steps). The round marker is the point the photo is
+  cropped around. It starts in the middle; move it onto the part of the photo that matters, and
+  every card for that photo that you have not adjusted by hand is cropped around it again.
+  Reset crop puts a card back to that automatic crop, and Ctrl/Cmd-Z reverses your last change.
+  Cropping in closely enlarges the picture, so the app stops at twice the size and adds a note
+  when a picture has been enlarged.
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), which the board and its checks read.
 
 For now every card shows a Warning, because alt text (a description of the image for people
 using screen readers) cannot be written yet. Still to come: saving the images as files
-(export), the editor for adjusting a crop, captions and alt text, carousels, and video.
+(export), captions and alt text, text and logos on the image, carousels, and video.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy
@@ -60,8 +71,9 @@ npm test        # run the tests
 npm run build   # build the app into dist/
 ```
 
-To check the board in a real Chrome browser, run `node e2e/board.check.mjs` (it needs Playwright
-with Chromium installed, and prints a pass or fail line for each check).
+To check the board in a real Chrome browser, run `node e2e/board.check.mjs`, and to check the
+editor, run `node e2e/editor.check.mjs` (each needs Playwright with Chromium installed, and
+prints a pass or fail line for each check).
 
 ## License
 

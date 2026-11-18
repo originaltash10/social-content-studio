@@ -14,6 +14,9 @@ import { fakeRenderClient, resultFor } from '../test/fakeRenderClient';
 import type { FakeRenderClient } from '../test/fakeRenderClient';
 import { hash, makeAsset } from '../test/fixtures';
 import type { PlacementSpec } from '../types';
+import { LOADING_TEXT } from '../editor/Editor';
+import { SourcePhotoError } from '../lib/editor/sourcePhoto';
+import type { DisplayPhoto, SourcePhotoInput } from '../lib/editor/sourcePhoto';
 import { Board, NO_CARDS_TEXT, NO_MATCH_TEXT, NO_PHOTOS_TEXT, NO_SESSION_TEXT } from './Board';
 
 // ---------------------------------------------------------------------------
@@ -66,8 +69,39 @@ const onController = (made: RenderController | null) => {
   controller = made;
 };
 
+/** Each time the editor asks for a photo; the test answers, or leaves it opening. */
+let photoLoads: {
+  input: SourcePhotoInput;
+  resolve: (photo: DisplayPhoto) => void;
+  reject: (error: unknown) => void;
+}[];
+const loadPhoto = (input: SourcePhotoInput) =>
+  new Promise<DisplayPhoto>((resolve, reject) => {
+    photoLoads.push({ input, resolve, reject });
+  });
+function photoOf(input: SourcePhotoInput) {
+  return {
+    bitmap: {} as ImageBitmap,
+    width: 2048,
+    height: 1536,
+    source: input.expected,
+    close: vi.fn<() => void>(),
+  };
+}
+/** Answers the editor's latest request with a photo. */
+async function showPhoto() {
+  const load = photoLoads.at(-1);
+  if (!load) throw new Error('the editor has not asked for a photo');
+  const photo = photoOf(load.input);
+  load.resolve(photo);
+  await act(() => Promise.resolve());
+  return photo;
+}
+
 function renderBoard() {
-  return render(<Board createClient={createClient} onController={onController} />);
+  return render(
+    <Board createClient={createClient} onController={onController} loadPhoto={loadPhoto} />,
+  );
 }
 
 /** Waits, inside act, until `count` jobs have reached the fake worker. */
@@ -111,6 +145,11 @@ function createCards(...placements: string[]) {
 beforeEach(() => {
   clients = [];
   controller = null;
+  photoLoads = [];
+  // jsdom has no canvas drawing.
+  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({
+    drawImage: vi.fn(),
+  } as never);
   let next = 0;
   URL.createObjectURL = vi.fn(() => `blob:render-${++next}`);
   URL.revokeObjectURL = vi.fn();
@@ -240,6 +279,7 @@ describe('creating cards', () => {
     expect(feed).toHaveTextContent(`${size.width} × ${size.height} JPG · 400 KB`);
     // No alt text yet, so rule 8 warns.
     expect(within(feed).getByText('Warning')).toBeInTheDocument();
+    expect(within(feed).getByText('Alt text is missing')).toBeInTheDocument();
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(status('Render progress')).toHaveTextContent(
       'Rendered 2 cards: 0 pass, 2 with warnings.',
@@ -376,9 +416,38 @@ describe('progress, cancel and failures', () => {
     answer(0, { upscaled: true });
     await idle();
     const size = sizeOf(FEED);
-    expect(article(/Feed vertical/)).toHaveTextContent(
-      `Enlarged to fit: this photo is smaller than ${size.width} × ${size.height}, so it may look soft.`,
+    const note = within(article(/Feed vertical/)).getByText(
+      `Note: enlarged to fit. The cropped area is smaller than ${size.width} × ${size.height} pixels, so it may look soft.`,
     );
+    // Neutral text, so it does not read as the reason for the Warning badge.
+    expect(note).toHaveClass('text-ink-secondary');
+    expect(note).not.toHaveClass('text-highlight-text');
+  });
+
+  it('shows the first reason for a result on the card, and how many more there are', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    // Nothing is shown until the file has been checked.
+    expect(article(/Feed vertical/)).not.toHaveTextContent('Alt text is missing');
+    await sent(1);
+    answer(0);
+    await idle();
+    const reason = within(article(/Feed vertical/)).getByText('Alt text is missing');
+    expect(reason).toHaveClass('text-highlight-text');
+    expect(reason).not.toHaveTextContent('more');
+
+    // A link in an Instagram caption adds a second warning.
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        card.copy.caption = 'See https://example.com';
+      });
+    });
+    await idle();
+    const card = article(/Feed vertical/);
+    expect(card.querySelectorAll('p.text-highlight-text')).toHaveLength(1);
+    expect(card).toHaveTextContent(/\+1 more/);
   });
 
   it('says so for a card whose placement or photo is not available', () => {
@@ -487,9 +556,162 @@ describe('the details dialog', () => {
     createCards('Feed vertical');
     fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
     const dialog = screen.getByRole('dialog');
-    expect(dialog).toHaveTextContent('No preview yet.');
     expect(dialog).toHaveTextContent('Not made yet');
     expect(dialog).toHaveTextContent('The file has not been made yet');
+  });
+
+  it('says the photo is opening, then shows the crop area beside the details', async () => {
+    const { dialog } = await openDetails();
+    expect(within(dialog).getByRole('status')).toHaveTextContent(LOADING_TEXT);
+    expect(photoLoads[0]?.input).toMatchObject({
+      fileName: 'site.jpg',
+      expected: { width: PHOTO.width, height: PHOTO.height },
+    });
+    await showPhoto();
+    expect(within(dialog).getByRole('application')).toHaveAccessibleName(/^Crop of site\.jpg/);
+    expect(within(dialog).getByRole('button', { name: 'Reset crop' })).toBeInTheDocument();
+    // The details and checks are still there, with a small preview of the rendered file.
+    const size = sizeOf(FEED);
+    expect(dialog).toHaveTextContent(`${size.width} × ${size.height} JPG · 400 KB`);
+    expect(within(dialog).getByRole('region', { name: 'Checks' })).toHaveTextContent(
+      'Alt text is missing.',
+    );
+  });
+
+  it('keeps a preview of the rendered file, which follows each new render', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const file = () => within(dialog).getByRole('region', { name: 'Rendered file' });
+    const first = within(file()).getByRole('img');
+    expect(first).toHaveAttribute('src', 'blob:render-1');
+    expect(first).toHaveAttribute('alt', 'Preview of site.jpg for Instagram Feed vertical');
+
+    // A change in the editor starts a new render: progress shows until its file is ready.
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    await sent(2);
+    expect(within(file()).queryByRole('img')).toBeNull();
+    expect(file()).toHaveTextContent('Waiting to render');
+    act(() => client.calls[1]?.onProgress('drawing'));
+    const bar = within(file()).getByRole('progressbar', {
+      name: 'Rendering Instagram Feed vertical',
+    });
+    expect(bar).toHaveAttribute('aria-valuenow', '60');
+    expect(bar).toHaveAttribute('aria-valuetext', 'Cropping and resizing');
+    answer(1);
+    await idle();
+    expect(within(file()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(within(file()).queryByRole('progressbar')).toBeNull();
+
+    // Cancelled, then failed: no picture, and it says why.
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    await sent(3);
+    act(() => {
+      controller?.cancelAll();
+    });
+    expect(file()).toHaveTextContent('Cancelled before the file was made.');
+    act(() => controller?.renderAgain(store().session?.cards[0]?.id as string));
+    await sent(4);
+    act(() => client.calls[3]?.reject(new RenderError('encode', 'Could not be saved as JPG.')));
+    await idle();
+    expect(file()).toHaveTextContent('No preview yet.');
+    expect(dialog).toHaveTextContent('Could not be saved as JPG.');
+  });
+
+  it('shows why a photo cannot be edited in place of the crop area, and keeps the details', async () => {
+    const { dialog } = await openDetails();
+    const message =
+      '"site.jpg" opens as 3024 x 4032 pixels in this browser, but it was 4032 x 3024 when it ' +
+      'was imported, so its crop cannot be edited here.';
+    photoLoads[0]?.reject(new SourcePhotoError(message));
+    await act(() => Promise.resolve());
+    expect(within(dialog).getByRole('alert')).toHaveTextContent(message);
+    expect(within(dialog).queryByRole('application')).toBeNull();
+    expect(dialog).toHaveTextContent('Version 1.');
+    expect(within(dialog).getByRole('region', { name: 'Checks' })).toHaveTextContent(
+      'Alt text is missing.',
+    );
+    expect(within(dialog).getByRole('button', { name: 'Close' })).toBeInTheDocument();
+  });
+
+  it('closes the photo when the dialog closes, and opens it again next time', async () => {
+    const { dialog, opener } = await openDetails();
+    const photo = await showPhoto();
+    pressEscape(dialog);
+    expect(dialog.open).toBe(false);
+    expect(photo.close).toHaveBeenCalledTimes(1);
+    fireEvent.click(opener);
+    expect(photoLoads).toHaveLength(2);
+  });
+
+  it('says the original is missing for a card whose file is not in memory', () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    act(() => useSessionStore.setState({ missingAssetIds: [PHOTO.id] }));
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    expect(within(screen.getByRole('dialog')).getByRole('alert')).toHaveTextContent(
+      'The original file for "site.jpg" is missing.',
+    );
+    expect(photoLoads).toHaveLength(0);
+  });
+
+  it('shows the preview, not the editor, for a card that cannot be edited', () => {
+    openSession(PHOTO);
+    renderBoard();
+    const base = {
+      status: 'draft' as const,
+      copy: { caption: '', firstComment: '', hashtags: [], altText: '' },
+      validation: { level: 'pass' as const, issues: [] },
+      overrideFail: false,
+      comments: [],
+    };
+    const edit = {
+      crop: { x: 0, y: 0, width: 1, height: 1 },
+      overlays: [],
+      format: 'jpg' as const,
+      quality: 0.9,
+    };
+    act(() => {
+      // A placement that is no longer in the platform data.
+      store().addCard({
+        ...base,
+        edit,
+        assetIds: [PHOTO.id],
+        platform: 'instagram',
+        placement: 'gone',
+      });
+      // A photo that is not in the session.
+      store().addCard({
+        ...base,
+        edit,
+        assetIds: [hash('e')],
+        platform: 'linkedin',
+        placement: 'image-square',
+      });
+      // Two photos, and a carousel.
+      store().addCard({
+        ...base,
+        edit,
+        assetIds: [PHOTO.id, PHOTO.id],
+        platform: 'instagram',
+        placement: 'feed-vertical',
+      });
+      store().addCard({
+        ...base,
+        edit: { slides: [], coverIndex: 0 },
+        assetIds: [PHOTO.id],
+        platform: 'instagram',
+        placement: 'feed-square',
+      });
+    });
+    for (const open of screen.getAllByRole('button', { name: /^Open / })) {
+      fireEvent.click(open);
+      const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+      expect(dialog).toHaveTextContent('No preview yet.');
+      expect(within(dialog).queryByRole('status')).toBeNull();
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    }
+    expect(photoLoads).toHaveLength(0);
   });
 
   it('shows "No problems found" and a failure message when they apply', async () => {
@@ -516,7 +738,53 @@ describe('the details dialog', () => {
     answer(0, { upscaled: true });
     await idle();
     fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
-    expect(screen.getByRole('dialog')).toHaveTextContent('Enlarged to fit');
+    const note = within(screen.getByRole('dialog')).getByText(/^Note: enlarged to fit\./);
+    expect(note).toHaveClass('text-ink-secondary');
+  });
+
+  it('leaves the card alone when it is opened and closed without a change', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    // A crop far below the smallest the editor allows: opening must not correct it.
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        if ('crop' in card.edit) card.edit.crop = { x: 0.4, y: 0.4, width: 0.003, height: 0.005 };
+      });
+    });
+    await sent(2);
+    answer(1);
+    await idle();
+    act(() => store().markSaved(store().revision));
+    const before = {
+      card: store().session?.cards[0],
+      session: store().session,
+      undoSteps: store().undoStack.length,
+      revision: store().revision,
+    };
+    expect(store().dirty).toBe(false);
+
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    expect(dialog.open).toBe(true);
+    // The editor is fully open, showing the crop enlarged to the smallest size it allows.
+    await showPhoto();
+    expect(within(dialog).getByRole('application')).toBeInTheDocument();
+    expect(within(dialog).getByTestId('crop-rect').style.width).not.toBe('0.3%');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    await idle();
+    expect(dialog.open).toBe(false);
+
+    // The very same objects: nothing was written, not even an equal value.
+    expect(store().session).toBe(before.session);
+    expect(store().session?.cards[0]).toBe(before.card);
+    expect(store().undoStack).toHaveLength(before.undoSteps);
+    expect(store().revision).toBe(before.revision);
+    expect(store().dirty).toBe(false);
   });
 
   it('closes when undo removes its card, and moves focus to the board heading', async () => {

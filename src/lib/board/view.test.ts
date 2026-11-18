@@ -194,7 +194,7 @@ describe('preview text', () => {
 
   it('explains an enlarged picture', () => {
     expect(upscaledNote(1080, 1350)).toBe(
-      'Enlarged to fit: this photo is smaller than 1080 × 1350, so it may look soft.',
+      'Note: enlarged to fit. The cropped area is smaller than 1080 × 1350 pixels, so it may look soft.',
     );
   });
 });

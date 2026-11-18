@@ -183,7 +183,7 @@ Stack decisions for Claude Code to follow:
 | Framework | React 18, TypeScript, Vite | Fast dev loop, strong typing for the data model |
 | State | Zustand with Immer | Single store, cheap undo via snapshots |
 | Styling | Tailwind CSS | Quick to iterate on a board UI |
-| Canvas | Fabric.js for the image editor | Object model for text, logos, crops with drag handles |
+| Canvas | Phase 1 crop and focal point use plain elements with pointer events. Whether to use Fabric.js for Phase 2 text and logo overlays is decided at the start of Phase 2 | The crop and focal point need no canvas library. Fabric 7 adds node-canvas and jsdom as optional dependencies |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap` | Keeps the UI responsive during batch resize |
 | HEIC decode | `heic-to` or `libheif-js` | iPhone photos |
 | Video | WebCodecs via `mediabunny` (demux, decode, encode, mux MP4) | Hardware-accelerated; ffmpeg.wasm only as fallback for unsupported codecs |
@@ -262,7 +262,7 @@ type CarouselEdit = { slides: { assetId: string; edit: ImageEdit }[]; coverIndex
 type Provenance = { provider: string; model: string; at: string };
 ```
 
-Rules: assets are immutable once imported; every change happens on a card. Duplicating a card copies `edit` and `copy`, sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit` and `copy`, sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
 
 Brand kit (`brand.json`): logos as PNG paths, fonts as uploaded files or Google Fonts names, a color palette, a voice document (plain text, under 500 words), and overlay presets. It is exportable on its own so the marketing team can share one file with the office.
 

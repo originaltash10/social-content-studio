@@ -14,7 +14,8 @@ Keep each task to one feature row from the SPEC feature table.
 - No backend. Everything runs in the browser; only AI provider calls leave the machine.
 - API keys are stored only in IndexedDB. They are never written into a session file, never logged,
   and sent only to that provider's API endpoint.
-- Assets are immutable once imported; every change happens on a card.
+- Asset files are immutable once imported; only the focal point can be changed afterwards, and
+  every other change happens on a card.
 - `session.json`, `brand.json` and `.scs` bundles are written only through the allowlist
   serializers in `src/lib/session/serialize.ts`. A new field on `Session` or `BrandKit` must be
   added there or it is not saved.
@@ -36,7 +37,7 @@ Keep each task to one feature row from the SPEC feature table.
 | Framework        | React 18, TypeScript (strict + `noUncheckedIndexedAccess`), Vite        |
 | State            | Zustand with Immer; single session store, snapshot-based undo (50)      |
 | Styling          | Tailwind CSS v4 (via `@tailwindcss/vite`)                               |
-| Canvas           | Fabric.js for the image editor (Phase 1 step 7+)                        |
+| Canvas           | Plain elements, pointer events (Phase 1); Fabric.js decided in Phase 2  |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap`                    |
 | HEIC decode      | `heic-to` or `libheif-js`                                               |
 | Video            | WebCodecs via `mediabunny`; ffmpeg.wasm only as fallback (Phase 3)      |

@@ -45,6 +45,9 @@ const string: Reader<string> = (value, path) =>
 const number: Reader<number> = (value, path) =>
   typeof value === 'number' && Number.isFinite(value) ? value : fail(path, 'a finite number');
 
+/** A fraction of a photo, kept inside 0..1: a point outside the photo is moved to its edge. */
+const unit: Reader<number> = (value, path) => Math.min(1, Math.max(0, number(value, path)));
+
 const boolean: Reader<boolean> = (value, path) =>
   typeof value === 'boolean' ? value : fail(path, 'true or false');
 
@@ -179,7 +182,7 @@ const session: Reader<Session> = object({
       width: number,
       height: number,
       durationMs: optional(number),
-      focal: object({ x: number, y: number }),
+      focal: object({ x: unit, y: unit }),
       description: optional(string),
     }),
   ),
