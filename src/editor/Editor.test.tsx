@@ -691,6 +691,36 @@ describe('the focal point', () => {
     expect(store().session?.cards).toHaveLength(2);
   });
 
+  it('stays on the photo, visible and draggable, when it lies outside the crop', async () => {
+    // A small crop at the left of the photo, and the focal point far to its right.
+    const small = { x: 0, y: 0, ...LIMITS.min };
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        (draft.edit as ImageEdit).crop = small;
+      });
+      store().setAssetFocal(PHOTO.id, { x: 0.9, y: 0.8 });
+    });
+    await openEditor();
+    // Placed on the whole photo, not inside the crop or the layer that is clipped to the photo.
+    expect(marker().style.left).toBe('calc(90% - 22px)');
+    expect(marker().style.top).toBe('calc(80% - 22px)');
+    expect(marker().parentElement).toBe(screen.getByTestId('crop-frame'));
+    expect(rect().contains(marker())).toBe(false);
+    expect(marker().closest('.overflow-hidden')).toBeNull();
+    // It comes after the crop in the page, so it is drawn on top and takes the press.
+    expect(
+      rect().compareDocumentPosition(marker()) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    fireEvent.pointerDown(marker(), pointer(at(0.9, 0.8)));
+    fireEvent.pointerMove(marker(), pointer(at(0.7, 0.6)));
+    fireEvent.pointerUp(marker(), pointer(at(0.7, 0.6)));
+    expect(focal()?.x).toBeCloseTo(0.7, 10);
+    expect(focal()?.y).toBeCloseTo(0.6, 10);
+    // The hand-adjusted crop is where it was.
+    expect(crop()).toEqual(small);
+  });
+
   it('stops at the edge of the photo', async () => {
     await openEditor();
     fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
