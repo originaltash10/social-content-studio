@@ -4,10 +4,12 @@ import {
   PADDING_TOLERANCE,
   centredOnPhoto,
   cropToPixels,
+  drawRects,
   fitCropToRatio,
   fitSize,
   focalCrop,
   focalInFrame,
+  paddingRects,
   slideIntoLimits,
   startRange,
 } from './crop';
@@ -535,6 +537,150 @@ describe('fitCropToRatio with padding', () => {
       expect(fitted.x + fitted.width).toBeGreaterThanOrEqual(1 - 1e-12);
       expect(fitted.y + fitted.height).toBeGreaterThanOrEqual(1 - 1e-12);
     });
+  });
+});
+
+describe('drawRects', () => {
+  const target = { width: 1080, height: 1080 };
+
+  it('draws a crop inside the photo whole, onto the whole output', () => {
+    const crop = { x: 500, y: 0, width: 3000, height: 3000 };
+    expect(drawRects(crop, landscape, target)).toEqual({
+      source: crop,
+      dest: { x: 0, y: 0, width: 1080, height: 1080 },
+    });
+  });
+
+  describe.each(PHOTOS)('for a crop inside a $name photo', ({ source }) => {
+    it.each(SHAPES)(
+      'the source is the crop and the output is covered: $name',
+      ({ size, ratio }) => {
+        for (const crop of unpaddedCrops(source, ratio)) {
+          const pixels = cropToPixels(fitCropToRatio(crop, source, ratio), source);
+          expect(drawRects(pixels, source, size)).toEqual({
+            source: pixels,
+            dest: { x: 0, y: 0, width: size.width, height: size.height },
+          });
+          expect(paddingRects({ x: 0, y: 0, ...size }, size)).toEqual([]);
+        }
+      },
+    );
+  });
+
+  it('draws only the photo from a crop with padding above and below', () => {
+    // The whole 4000 x 3000 photo in a square: 500 source pixels of padding at top and bottom.
+    const crop = { x: 0, y: -500, width: 4000, height: 4000 };
+    expect(drawRects(crop, landscape, target)).toEqual({
+      source: { x: 0, y: 0, width: 4000, height: 3000 },
+      dest: { x: 0, y: 135, width: 1080, height: 810 },
+    });
+  });
+
+  it('draws only the photo from a crop with padding left and right', () => {
+    const crop = { x: -500, y: 0, width: 4000, height: 4000 };
+    expect(drawRects(crop, portrait, target)).toEqual({
+      source: { x: 0, y: 0, width: 3000, height: 4000 },
+      dest: { x: 135, y: 0, width: 810, height: 1080 },
+    });
+  });
+
+  it('draws the part of the photo inside a crop that is padded on one axis only', () => {
+    // 3900 px tall from a photo 3000 tall, all of the padding below; 3900 of 4000 px across.
+    const crop = { x: 100, y: 0, width: 3900, height: 3900 };
+    const { source, dest } = drawRects(crop, landscape, target);
+    expect(source).toEqual({ x: 100, y: 0, width: 3900, height: 3000 });
+    expect(dest).toEqual({ x: 0, y: 0, width: 1080, height: Math.round((3000 * 1080) / 3900) });
+  });
+
+  it('rounds each edge once, so uneven padding still adds up to the output size', () => {
+    // 1 px of padding above and 2 below a 3-px-tall photo, drawn 10 px tall.
+    const { dest } = drawRects(
+      { x: 0, y: -1, width: 6, height: 6 },
+      { width: 6, height: 3 },
+      {
+        width: 10,
+        height: 10,
+      },
+    );
+    expect(dest).toEqual({ x: 0, y: 2, width: 10, height: 5 });
+    const strips = paddingRects(dest, { width: 10, height: 10 });
+    expect(strips).toEqual([
+      { x: 0, y: 0, width: 10, height: 2 },
+      { x: 0, y: 7, width: 10, height: 3 },
+    ]);
+  });
+
+  it('never returns negative zero', () => {
+    const { dest } = drawRects({ x: 0, y: 0, width: 4000, height: 3000 }, landscape, target);
+    expect(Object.is(dest.x, 0)).toBe(true);
+    expect(Object.is(dest.y, 0)).toBe(true);
+  });
+
+  describe.each(PHOTOS)('for the whole of a $name photo', ({ source }) => {
+    it.each(SHAPES)('the photo and its padding cover $name exactly once', ({ size, ratio }) => {
+      const crop = cropToPixels(centredOnPhoto(fitSize(source, ratio)), source);
+      const { source: read, dest } = drawRects(crop, source, size);
+      // Only the photo is read, and all of it.
+      expect(read).toEqual({ x: 0, y: 0, ...source });
+      // Whole pixels, inside the output.
+      for (const value of Object.values(dest)) expect(Number.isInteger(value)).toBe(true);
+      expect(dest.x).toBeGreaterThanOrEqual(0);
+      expect(dest.y).toBeGreaterThanOrEqual(0);
+      expect(dest.x + dest.width).toBeLessThanOrEqual(size.width);
+      expect(dest.y + dest.height).toBeLessThanOrEqual(size.height);
+      // The photo and the strips of padding do not overlap and leave nothing uncovered.
+      const strips = paddingRects(dest, size);
+      const area = (r: { width: number; height: number }) => r.width * r.height;
+      expect(area(dest) + strips.reduce((sum, strip) => sum + area(strip), 0)).toBe(area(size));
+      for (const strip of strips) {
+        const apart =
+          strip.x >= dest.x + dest.width ||
+          strip.x + strip.width <= dest.x ||
+          strip.y >= dest.y + dest.height ||
+          strip.y + strip.height <= dest.y;
+        expect(apart).toBe(true);
+      }
+    });
+  });
+});
+
+describe('paddingRects', () => {
+  const target = { width: 100, height: 80 };
+
+  it('is empty when the photo covers the output', () => {
+    expect(paddingRects({ x: 0, y: 0, width: 100, height: 80 }, target)).toEqual([]);
+  });
+
+  it('gives a strip above and a strip below', () => {
+    expect(paddingRects({ x: 0, y: 10, width: 100, height: 50 }, target)).toEqual([
+      { x: 0, y: 0, width: 100, height: 10 },
+      { x: 0, y: 60, width: 100, height: 20 },
+    ]);
+  });
+
+  it('gives a strip to the left and a strip to the right', () => {
+    expect(paddingRects({ x: 15, y: 0, width: 60, height: 80 }, target)).toEqual([
+      { x: 0, y: 0, width: 15, height: 80 },
+      { x: 75, y: 0, width: 25, height: 80 },
+    ]);
+  });
+
+  it('gives only the strips that have any area', () => {
+    expect(paddingRects({ x: 0, y: 0, width: 100, height: 50 }, target)).toEqual([
+      { x: 0, y: 50, width: 100, height: 30 },
+    ]);
+    expect(paddingRects({ x: 15, y: 0, width: 85, height: 80 }, target)).toEqual([
+      { x: 0, y: 0, width: 15, height: 80 },
+    ]);
+  });
+
+  it('gives all four around a photo that touches no edge', () => {
+    expect(paddingRects({ x: 15, y: 10, width: 60, height: 50 }, target)).toEqual([
+      { x: 0, y: 0, width: 100, height: 10 },
+      { x: 0, y: 60, width: 100, height: 20 },
+      { x: 0, y: 10, width: 15, height: 50 },
+      { x: 75, y: 10, width: 25, height: 50 },
+    ]);
   });
 });
 

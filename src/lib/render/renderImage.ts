@@ -1,13 +1,19 @@
 /**
  * Renders one image: decode the original file, crop and resize it to the planned output size,
- * and encode it as JPG or PNG. Written to run inside the image worker, but nothing here depends
- * on being in one: the browser functions it uses are passed in, so tests can replace them.
+ * fill any padding with the card's background colour, and encode it as JPG or PNG. Written to
+ * run inside the image worker, but nothing here depends on being in one: the browser functions
+ * it uses are passed in, so tests can replace them.
  *
  * The whole photo is decoded, then `drawImage` crops and scales it in one go with high-quality
  * smoothing. `createImageBitmap` can also crop and resize while decoding, which would avoid
  * holding the full-size bitmap, but in Chromium that route takes the crop from the wrong place
  * for photos stored with a rotation, and shrinks a cropped photo with a coarse filter that
  * leaves fine detail jagged. It is not used.
+ *
+ * The output is the crop. Where the crop reaches past the photo there is padding in the plan's
+ * background colour, and only the part of the crop that overlaps the photo is read from the
+ * photo. A JPG is filled with the colour all over first, so transparent parts of the photo take
+ * it too. A PNG has only its padding filled, so the photo keeps its own transparency.
  *
  * Orientation is handled as at import (`imageOrientation: 'from-image'`; the HEIC decoder
  * applies it itself), and the decoded size is checked against the size recorded at import, so
@@ -18,6 +24,7 @@
 import { damagedMessage, heicMessage } from '../image/decode';
 import { decodeHeic } from '../image/heic';
 import type { HeicDecoder } from '../image/heic';
+import { drawRects, paddingRects } from './crop';
 import { clampQuality } from './plan';
 import type { OutputFormat, RenderPlan } from './plan';
 import { RenderError, unexpectedError } from './protocol';
@@ -46,8 +53,6 @@ export function browserDeps(): RenderDeps {
 
 const MIME: Record<OutputFormat, string> = { jpg: 'image/jpeg', png: 'image/png' };
 const FORMAT_LABEL: Record<OutputFormat, string> = { jpg: 'JPG', png: 'PNG' };
-/** JPG has no transparency, so transparent parts of the source are filled with this. */
-export const JPG_BACKGROUND = '#ffffff';
 
 function sizeChangedMessage(job: RenderJob, bitmap: ImageBitmap): string {
   const { width, height } = job.plan.sourceSize;
@@ -103,27 +108,34 @@ export function createImageRenderer(deps: RenderDeps = browserDeps()): ImageRend
   }
 
   function draw(bitmap: ImageBitmap, plan: RenderPlan, fileName: string): RenderCanvas {
-    const { crop, target } = plan;
+    const { target } = plan;
+    const { source, dest } = drawRects(plan.crop, plan.sourceSize, target);
     try {
       const canvas = deps.createCanvas(target.width, target.height);
       const context = canvas.getContext('2d');
       if (!context) throw new Error('no 2d context');
       if (plan.format === 'jpg') {
-        context.fillStyle = JPG_BACKGROUND;
+        // JPG has no transparency: the colour goes everywhere, under the photo as well.
+        context.fillStyle = plan.background;
         context.fillRect(0, 0, target.width, target.height);
+      } else {
+        // PNG keeps the photo's transparency: only the padding is coloured.
+        const padding = paddingRects(dest, target);
+        if (padding.length > 0) context.fillStyle = plan.background;
+        for (const strip of padding) context.fillRect(strip.x, strip.y, strip.width, strip.height);
       }
       context.imageSmoothingEnabled = true;
       context.imageSmoothingQuality = 'high';
       context.drawImage(
         bitmap,
-        crop.x,
-        crop.y,
-        crop.width,
-        crop.height,
-        0,
-        0,
-        target.width,
-        target.height,
+        source.x,
+        source.y,
+        source.width,
+        source.height,
+        dest.x,
+        dest.y,
+        dest.width,
+        dest.height,
       );
       return canvas;
     } catch {

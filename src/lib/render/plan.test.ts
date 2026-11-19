@@ -205,6 +205,23 @@ describe('planRender', () => {
     expect(plan.upscaled).toBe(targetSize(square).width > 4000);
   });
 
+  it("carries the card's background colour, in lowercase, and white without a usable one", () => {
+    expect(planRender({ asset, spec: anyImage }).background).toBe('#ffffff');
+    expect(planRender({ asset, spec: anyImage, background: undefined }).background).toBe('#ffffff');
+    expect(planRender({ asset, spec: anyImage, background: '#0A7F5C' }).background).toBe('#0a7f5c');
+    for (const unusable of ['0a7f5c', '#0af', '#0a7f5cff', 'white', '']) {
+      expect(planRender({ asset, spec: anyImage, background: unusable }).background).toBe(
+        '#ffffff',
+      );
+    }
+  });
+
+  it('plans the same crop, size, format and quality whatever the colour', () => {
+    const plain = planRender({ asset, spec: anyImage });
+    const coloured = planRender({ asset, spec: anyImage, background: '#0a7f5c' });
+    expect({ ...coloured, background: plain.background }).toEqual(plain);
+  });
+
   it('defaults to JPG at the default quality', () => {
     const plan = planRender({ asset, spec: anyImage });
     expect(plan.format).toBe('jpg');

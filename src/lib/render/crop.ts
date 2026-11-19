@@ -188,6 +188,53 @@ export function cropToPixels(crop: Rect, source: Size): PixelRect {
   };
 }
 
+/** What one render draws: which part of the photo, and where in the output it goes. */
+export type DrawRects = {
+  /** The part of the crop that overlaps the photo, in source pixels. Never outside the photo. */
+  source: PixelRect;
+  /** Where that part goes in the output, in whole output pixels. */
+  dest: PixelRect;
+};
+
+/**
+ * Splits a crop into the part to draw from the photo and where it lands in the output. A crop
+ * inside the photo is drawn whole, onto the whole output. A crop with padding is drawn only
+ * where it overlaps the photo, and the rest of the output is padding.
+ *
+ * The four edges of `dest` are each rounded to a whole output pixel once. The padding is made
+ * from the same four numbers (`paddingRects`), so the photo and the padding meet exactly, with
+ * no seam and no gap.
+ */
+export function drawRects(crop: PixelRect, source: Size, target: Size): DrawRects {
+  const left = Math.max(crop.x, 0);
+  const top = Math.max(crop.y, 0);
+  const right = Math.min(crop.x + crop.width, source.width);
+  const bottom = Math.min(crop.y + crop.height, source.height);
+  const across = (x: number) => whole(((x - crop.x) * target.width) / crop.width);
+  const down = (y: number) => whole(((y - crop.y) * target.height) / crop.height);
+  const dest = { x: across(left), y: down(top) };
+  return {
+    source: { x: left, y: top, width: right - left, height: bottom - top },
+    dest: { ...dest, width: across(right) - dest.x, height: down(bottom) - dest.y },
+  };
+}
+
+/**
+ * The parts of the output that the photo does not cover, given where the photo is drawn: a
+ * strip above it and one below it across the whole width, and one to each side of it. Only the
+ * strips that have any area are returned, so a photo that covers the output gives none.
+ */
+export function paddingRects(dest: PixelRect, target: Size): PixelRect[] {
+  const right = dest.x + dest.width;
+  const bottom = dest.y + dest.height;
+  return [
+    { x: 0, y: 0, width: target.width, height: dest.y },
+    { x: 0, y: bottom, width: target.width, height: target.height - bottom },
+    { x: 0, y: dest.y, width: dest.x, height: dest.height },
+    { x: right, y: dest.y, width: target.width - right, height: dest.height },
+  ].filter((strip) => strip.width > 0 && strip.height > 0);
+}
+
 /**
  * Where the photo's focal point lands in the cropped output, as fractions (0..1) of the output
  * frame. This is the form the validator's safe-zone rule takes. A focal point outside the crop

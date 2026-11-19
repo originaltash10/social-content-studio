@@ -164,7 +164,7 @@ export function createRenderController(deps: ControllerDeps): RenderController {
     if (!blob) return { ok: false, key: 'missing', message: missingFileMessage(asset.fileName) };
     let plan: RenderPlan;
     try {
-      plan = planRender({ asset, spec, edit: card.edit });
+      plan = planRender({ asset, spec, edit: card.edit, background: card.background });
     } catch (error) {
       const message =
         error instanceof RenderPlanError ? error.message : unexpectedError(asset.fileName).message;
