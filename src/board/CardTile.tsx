@@ -36,6 +36,27 @@ export type CardTileProps = {
   onDuplicate: () => void;
 };
 
+/**
+ * A button's word, as wide as the wider of its two words: the other one is laid in the same
+ * place, invisible and hidden from screen readers. Cancel and Render again take turns in one
+ * place, so without this the row of buttons could wrap differently, and the tile change height,
+ * each time a render starts or ends.
+ */
+function SameWidth({ shown, other }: { shown: string; other: string }) {
+  return (
+    <span className="inline-grid justify-items-center">
+      <span className="col-start-1 row-start-1">{shown}</span>
+      <span
+        aria-hidden="true"
+        data-testid="same-width"
+        className="invisible col-start-1 row-start-1"
+      >
+        {other}
+      </span>
+    </span>
+  );
+}
+
 export function CardTile(props: CardTileProps) {
   const { card, name, label, size, fileName, render, version } = props;
   const pending = isPending(render);
@@ -99,7 +120,7 @@ export function CardTile(props: CardTileProps) {
             aria-label={`Cancel ${label}`}
             onClick={props.onCancel}
           >
-            Cancel
+            <SameWidth shown="Cancel" other="Render again" />
           </button>
         ) : (
           <button
@@ -108,7 +129,7 @@ export function CardTile(props: CardTileProps) {
             aria-label={`Render again ${label}`}
             onClick={props.onRenderAgain}
           >
-            Render again
+            <SameWidth shown="Render again" other="Cancel" />
           </button>
         )}
         <button

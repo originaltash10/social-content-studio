@@ -443,8 +443,16 @@ describe('progress, cancel and failures', () => {
     const { width, height } = sizeOf(FEED);
     expect(tile()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
 
+    // Cancel and Render again take turns in one place, each as wide as the wider of the two,
+    // so the row of buttons wraps the same way whichever is shown.
+    const twin = (name: string) => within(button(`${name} ${label}`)).getByTestId('same-width');
+    expect(twin('Render again')).toHaveTextContent('Cancel');
+    expect(twin('Render again')).toHaveAttribute('aria-hidden', 'true');
+    expect(twin('Render again')).toHaveClass('invisible');
     fireEvent.click(button(`Render again ${label}`));
     await sent(2);
+    expect(twin('Cancel')).toHaveTextContent('Render again');
+    expect(twin('Cancel')).toHaveClass('invisible');
     act(() => client.calls[1]?.onProgress('encoding'));
     // The same picture, dimmed, with the progress over it; "Updating…" in the file's line.
     expect(within(tile()).getByRole('img')).toBe(picture);
