@@ -208,6 +208,8 @@ async function runBoard(browser, name, url) {
   try {
     await page.goto(url, { waitUntil: 'load' });
     await page.getByRole('button', { name: 'New session' }).click();
+    // The system's file picker cannot be driven, so files are given to the inputs directly
+    // (here and wherever setInputFiles is used below).
     await page.getByLabel('Photos to import').setInputFiles({
       name: PHOTO,
       mimeType: 'image/jpeg',
@@ -291,6 +293,11 @@ async function runBoard(browser, name, url) {
 
     // 4. Ctrl-Z removes the duplicate just made, and its job (queued in the worker behind two
     //    others) is cancelled there.
+    //    This one step is done inside the page, with element.click() and a key event sent to
+    //    the window, and not with real clicks and page.keyboard. The reason: the undo has to
+    //    arrive while the duplicate's job is still waiting in the worker, and real input takes
+    //    long enough for the job to start first. The same undo from a real click and the real
+    //    keyboard is checked in 4a.
     const before = await page.getByRole('article').count();
     const undone = await page.evaluate(
       async (labels) => {
@@ -316,6 +323,28 @@ async function runBoard(browser, name, url) {
       'Ctrl-Z removes the duplicate just made and cancels its job in the worker',
       after === before && duplicateGone && cancelSent,
       `cards ${before} -> ${after}; cancel sent for ${undone.jobId}: ${cancelSent}`,
+    );
+
+    // 4a. The same with real input: a mouse click on Duplicate, then Ctrl-Z from the keyboard,
+    //     which goes to whatever has focus (the Duplicate button).
+    const duplicateButton = page.getByRole('button', {
+      name: `Duplicate ${FEED_CARD}`,
+      exact: true,
+    });
+    await duplicateButton.click();
+    await page.getByRole('article', { name: /v2/ }).waitFor();
+    const withCopy = await page.getByRole('article').count();
+    const focusOnDuplicate = await duplicateButton.evaluate(
+      (element) => element === document.activeElement,
+    );
+    await page.keyboard.press('Control+z');
+    await page.getByRole('article', { name: /v2/ }).waitFor({ state: 'detached' });
+    await waitForRendered(page, before);
+    const withoutCopy = await page.getByRole('article').count();
+    check(
+      'Ctrl-Z from the keyboard, after a real click on Duplicate, removes the duplicate',
+      withCopy === before + 1 && focusOnDuplicate && withoutCopy === before,
+      `cards ${before} -> ${withCopy} -> ${withoutCopy}; focus was on the Duplicate button: ${focusOnDuplicate}`,
     );
 
     // 5. Session round trip: Download .scs, Clear, Load .scs.
