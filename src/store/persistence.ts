@@ -58,6 +58,21 @@ export function currentFolderName(): string | null {
 }
 
 /**
+ * The folder the session `sessionId` saves to, for writing its exports into exports/. Null when
+ * that session is not the open one, has no folder, or write permission was not granted. Call it
+ * from a click handler, before any other await: it may show the browser's permission prompt,
+ * which only appears in response to a user action. Makes no other file-system calls.
+ */
+export async function exportFolderFor(
+  sessionId: string,
+): Promise<FileSystemDirectoryHandle | null> {
+  const { session } = store();
+  const dir = session?.id === sessionId ? folderFor(session) : null;
+  if (!dir) return null;
+  return (await ensurePermission(dir, true)) ? dir : null;
+}
+
+/**
  * Remembering or forgetting the folder for "Reopen last" is a convenience. If IndexedDB refuses,
  * the session itself is unaffected, so the failure is not allowed to break a save or a clear.
  */

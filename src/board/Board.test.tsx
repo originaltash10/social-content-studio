@@ -854,3 +854,43 @@ describe('the session and the controller', () => {
     expect(client.calls[0]?.settled).toBe(true);
   });
 });
+
+describe('telling the export panel when the board is busy', () => {
+  it('reports busy while previews are waiting or being made, and not busy once they are done', async () => {
+    const onBusyChange = vi.fn();
+    openSession(PHOTO);
+    render(
+      <Board
+        createClient={createClient}
+        onController={onController}
+        loadPhoto={loadPhoto}
+        onBusyChange={onBusyChange}
+      />,
+    );
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+    createCards('Feed vertical', 'Image post square');
+    await sent(2);
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    answer(0);
+    await act(() => Promise.resolve());
+    // One card is still being made.
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    answer(1);
+    await idle();
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it('counts a cancelled preview as finished', async () => {
+    const onBusyChange = vi.fn();
+    openSession(PHOTO);
+    render(
+      <Board createClient={createClient} onController={onController} onBusyChange={onBusyChange} />,
+    );
+    createCards('Feed vertical');
+    await sent(1);
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+    fireEvent.click(button('Cancel all'));
+    await idle();
+    expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  });
+});
