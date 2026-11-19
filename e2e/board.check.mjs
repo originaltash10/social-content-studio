@@ -8,8 +8,9 @@
  * It imports a photo made in the browser (no personal images), creates Instagram Feed vertical
  * and LinkedIn Image post square cards, and checks each rendered file's type, size in pixels
  * and size in bytes. It also checks the details dialog, Cancel and Render again, Ctrl-Z, a
- * .scs download and reload, one HEIC render, and that every request stays under the app's own
- * address with no failed requests and no console errors.
+ * .scs download and reload, one HEIC render, that a tile keeps its height on every animation
+ * frame while its card renders again, and that every request stays under the app's own address
+ * with no failed requests and no console errors.
  *
  * Like e2e/image-worker.check.mjs, it needs Playwright with Chromium already installed on the
  * machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is written
@@ -21,6 +22,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { describeSampling, startSampling, steady, stopSampling } from './layoutSampler.mjs';
+import { controlWorkers, holdRenders, releaseRenders, waitForHeld } from './workerHold.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -184,6 +188,8 @@ async function runBoard(browser, name, url) {
   console.log(`\n== Board check: ${name} (${url})`);
   const context = await browser.newContext({ acceptDownloads: true });
   await context.addInitScript(recordWorkerMessages);
+  // Lets section 7 hold a render back (see e2e/workerHold.mjs); nothing is held otherwise.
+  await context.addInitScript(controlWorkers);
   const requests = [];
   const problems = [];
   context.on('request', (request) => requests.push(request.url()));
@@ -424,7 +430,48 @@ async function runBoard(browser, name, url) {
     console.log(`  heic-to files fetched for one HEIC import and render: ${heicRequests.length}`);
     for (const request of heicRequests) console.log(`          ${request}`);
 
-    // 7. Network and console.
+    // 7. A tile keeps its height while its card is rendered again: measured on every animation
+    //    frame, from before Render again is clicked until the new file is shown, and each
+    //    measurement must be within 1 px of the first. The render is held back with the
+    //    worker-message hold (e2e/workerHold.mjs), because a render can finish within a frame
+    //    or two and the tile would then never be measured while its file is being made.
+    //    The window is made narrow enough for one tile per row first: in a wider grid each
+    //    tile is stretched to the tallest in its row, which can hide a change in its own height.
+    await page.setViewportSize({ width: 400, height: 900 });
+    const feedTile = `article[aria-label="${FEED_CARD}"]`;
+    await page.locator(feedTile).getByRole('img').waitFor({ timeout: 60_000 });
+    await renderProgress(page)
+      .filter({ hasText: /^Rendered \d+ cards?: / })
+      .waitFor({ timeout: 60_000 });
+    const againButton = page.getByRole('button', {
+      name: `Render again ${FEED_CARD}`,
+      exact: true,
+    });
+    // Scrolled to before sampling starts, so the click below does not move the page.
+    await againButton.scrollIntoViewIfNeeded();
+    await startSampling(
+      page,
+      { 'tile height': { selector: feedTile, edge: 'height' } },
+      { 'a file being made': `${feedTile} [role=progressbar]` },
+    );
+    await holdRenders(page);
+    await againButton.click();
+    await waitForHeld(page);
+    await page.waitForTimeout(400);
+    await releaseRenders(page);
+    await renderProgress(page)
+      .filter({ hasText: /^Rendered \d+ cards?: / })
+      .waitFor({ timeout: 60_000 });
+    await page.waitForTimeout(300);
+    const tileSampling = await stopSampling(page);
+    await page.setViewportSize({ width: 1280, height: 720 });
+    check(
+      'a tile keeps its height while its card is rendered again, with the render held and let through (one tile per row)',
+      steady(tileSampling) && tileSampling.seen['a file being made'],
+      describeSampling(tileSampling),
+    );
+
+    // 8. Network and console.
     const outside = requests.filter((r) => !r.startsWith(url) && !/^(blob|data):/.test(r));
     check(
       `every request stays under ${url}`,

@@ -29,6 +29,11 @@
  * (real touch input, sent through the DevTools protocol) and a held arrow key on the quality
  * slider are each one undo step.
  *
+ * Then the dialog's size while the card renders again: with the crop small enough for the
+ * enlarged-to-fit note, a held arrow key and a mouse drag of the crop, at 1280 × 900 (editor
+ * beside the details) and 900 × 900 (editor above them), each leave the dialog's height and the
+ * crop area's and the Close button's positions within 1 px on every animation frame.
+ *
  * How it reaches things. Every control is reached the way a person reaches it: with Tab, or
  * with a real mouse click or drag. Keys are sent with page.keyboard, to whatever has focus. It
  * never calls element.focus() and never dispatches an event straight at an element. The two
@@ -46,6 +51,9 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { describeSampling, startSampling, steady, stopSampling } from './layoutSampler.mjs';
+import { controlWorkers, holdRenders, releaseRenders, waitForHeld } from './workerHold.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
@@ -436,6 +444,8 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
     acceptDownloads: true,
     viewport: { width: 1280, height: 900 },
   });
+  // Lets section 18 hold a render back (see e2e/workerHold.mjs); nothing is held otherwise.
+  await context.addInitScript(controlWorkers);
   const requests = [];
   const problems = [];
   context.on('request', (request) =>
@@ -1275,7 +1285,99 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
     );
     await closeEditor(page);
 
-    // 18. With scrollbars that take up room (this browser is started with them; the one above
+    // 18. The dialog keeps its size while the card is rendered again: its height, where the
+    //     crop area is and where the Close button is are measured on every animation frame
+    //     while the crop changes, and each must stay within 1 px of where it was before. The
+    //     crop is made small first, so the file is enlarged to fit and the note about it shows.
+    //     Each run holds one render back with the worker-message hold (e2e/workerHold.mjs):
+    //     a render can finish within a frame or two, so without the hold the state while a
+    //     file is being made might never be measured. The crop is then changed again without
+    //     the hold, so renders that finish while the crop moves are measured too.
+    await openEditor(page, FEED_CARD);
+    await clickCrop(page);
+    for (let i = 0; i < 7; i++) await page.keyboard.press('Shift+Minus');
+    const dialogBox = page.getByRole('dialog');
+    const enlargedNote = dialogBox.getByText(/^Note: enlarged to fit\./);
+    const allRendered = () =>
+      renderProgress(page)
+        .filter({ hasText: /^Rendered \d+ cards?: / })
+        .waitFor({ timeout: 60_000 });
+    await enlargedNote.waitFor({ timeout: 60_000 });
+    await allRendered();
+    const PROBES = {
+      'dialog height': { selector: 'dialog[open]', edge: 'height' },
+      'crop area top': { selector: 'dialog[open] [role=application]', edge: 'top' },
+      'crop area left': { selector: 'dialog[open] [role=application]', edge: 'left' },
+      'Close top': { selector: 'dialog[open] button', text: 'Close', edge: 'top' },
+      'Close left': { selector: 'dialog[open] button', text: 'Close', edge: 'left' },
+    };
+    const WATCHES = { 'a file being made': 'dialog[open] [role=progressbar]' };
+    /** Samples while `change` runs: first with one render held, then with renders let through. */
+    const sampleWhile = async (change) => {
+      await allRendered();
+      await page.waitForTimeout(300);
+      const noteBefore = await enlargedNote.isVisible();
+      await startSampling(page, PROBES, WATCHES);
+      await holdRenders(page);
+      await change(1);
+      await waitForHeld(page);
+      // Held in the updating state for a while, so several frames measure it.
+      await page.waitForTimeout(400);
+      await releaseRenders(page);
+      await change(-1);
+      await allRendered();
+      await page.waitForTimeout(300);
+      const result = await stopSampling(page);
+      return { result, notes: noteBefore && (await enlargedNote.isVisible()) };
+    };
+    /** A held arrow key: repeated key-downs with one key-up, as a key held down sends them. */
+    const holdArrow = async (direction) => {
+      const key = direction > 0 ? 'ArrowRight' : 'ArrowLeft';
+      for (let i = 0; i < 8; i++) {
+        await page.keyboard.down(key);
+        await page.waitForTimeout(30);
+      }
+      await page.keyboard.up(key);
+    };
+    /** A mouse drag of the crop, in steps, from a point clear of the marker and the corners. */
+    const dragCrop = async (direction) => {
+      const start = await cropPoint(page);
+      const frame = await page.getByTestId('crop-frame').boundingBox();
+      await page.mouse.move(start.x, start.y);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) {
+        await page.mouse.move(start.x + direction * i * frame.width * 0.01, start.y);
+        await page.waitForTimeout(30);
+      }
+      await page.mouse.up();
+    };
+    const steadyTitle = (how, size) =>
+      `the dialog keeps its height, and the crop area and the Close button stay put, while ${how} and its render is held and let through (${size}, with the enlarged-to-fit note)`;
+    const sizes = [
+      ['1280 × 900, editor beside the details', { width: 1280, height: 900 }],
+      ['900 × 900, editor above the details', { width: 900, height: 900 }],
+    ];
+    for (const [sizeName, viewport] of sizes) {
+      await page.setViewportSize(viewport);
+      // A real click in the crop gives the crop area focus; it changes nothing.
+      await clickCrop(page);
+      const keys = await sampleWhile(holdArrow);
+      check(
+        steadyTitle('an arrow key held on the crop area moves the crop', sizeName),
+        steady(keys.result) && keys.result.seen['a file being made'] && keys.notes,
+        `${describeSampling(keys.result)}; note shown before and after: ${keys.notes}`,
+      );
+      const drags = await sampleWhile(dragCrop);
+      check(
+        steadyTitle('a mouse drag moves the crop', sizeName),
+        steady(drags.result) && drags.result.seen['a file being made'] && drags.notes,
+        `${describeSampling(drags.result)}; note shown before and after: ${drags.notes}`,
+      );
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await closeEditor(page);
+
+    // 19. With scrollbars that take up room (this browser is started with them; the one above
     //     hides them), opening and closing the dialog does not move the board sideways.
     const wide = await scrollbarBrowser.newContext({ viewport: { width: 1280, height: 600 } });
     try {
@@ -1303,7 +1405,7 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
       await wide.close();
     }
 
-    // 19. Network and console.
+    // 20. Network and console.
     const outside = requests.filter((r) => !r.url.startsWith(url) && !/^(blob|data):/.test(r.url));
     check(
       `every request stays under ${url}`,
