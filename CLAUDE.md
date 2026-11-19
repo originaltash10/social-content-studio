@@ -80,7 +80,9 @@ npm run coverage     # Vitest with v8 coverage over src/lib
 Run `typecheck`, `lint`, and `test` before every commit.
 
 Browser checks run in real Chromium (they need Playwright with Chromium installed) and are not
-part of `npm test`:
+part of `npm test`. A browser check reaches a control the way a user does (Tab or a click) and
+sends keys with `page.keyboard`; it never calls `element.focus()` or dispatches an event straight
+at an element, unless the check says why:
 
 ```bash
 node e2e/image-worker.check.mjs   # image worker and HEIC import

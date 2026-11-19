@@ -31,8 +31,9 @@ the images as files. The app as a whole is not finished. What works today:
   reopened session makes them again.
 - **Adjusting a crop.** Open a card to see the whole photo with the crop drawn over it. Drag the
   crop to move it, or drag a corner to make it larger or smaller; it always keeps the shape the
-  placement needs. You can do the same with the keyboard: the arrow keys move the crop, and plus
-  and minus resize it (hold Shift for bigger steps). The round marker is the point the photo is
+  placement needs. You can do the same with the keyboard: click the crop or press Tab to select
+  it, then the arrow keys move it, and the = and - keys make it bigger and smaller (hold Shift
+  for steps ten times as big). The round marker is the point the photo is
   cropped around. It starts in the middle; move it onto the part of the photo that matters, and
   every card for that photo that you have not adjusted by hand is cropped around it again. A
   duplicated card has its own marker: moving it changes only that card, and moving the photo's
