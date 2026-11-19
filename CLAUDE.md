@@ -21,7 +21,8 @@ Keep each task to one feature row from the SPEC feature table.
   added there or it is not saved.
 - A session folder is only ever written with the session it was opened or chosen for, and clearing
   a session deletes nothing on disk.
-- Coverage for `src/lib/session` and `src/store` must stay at 100% (`npm run coverage`).
+- Coverage for `src/lib/session`, `src/lib/export` and `src/store` must stay at 100%
+  (`npm run coverage`).
 - The validator (`src/lib/validate.ts`) must keep pass and fail tests for all nine rules in SPEC.md.
 - Supported browsers: Chrome and Edge only (WebCodecs, File System Access API).
 - Git identity: this repo is public. Before the first commit in any session, set repo-level git
@@ -57,6 +58,7 @@ src/export     per-platform folders, captions.csv
 src/settings   brand kit, AI keys
 src/lib        image/, video/, validate.ts (pure, no DOM or store access)
 src/lib/session  session.json/brand.json serializers, folder and .scs readers/writers (no store access)
+src/lib/export   export file names, metadata stripping, captions.csv, export runner (no store access)
 src/store      session store (sessionStore.ts) and save/load/autosave (persistence.ts)
 src/ai         provider interface (provider.ts), adapters, tasks/
 src/workers    image, video, transcription workers
@@ -76,3 +78,13 @@ npm run coverage     # Vitest with v8 coverage over src/lib
 ```
 
 Run `typecheck`, `lint`, and `test` before every commit.
+
+Browser checks run in real Chromium (they need Playwright with Chromium installed) and are not
+part of `npm test`:
+
+```bash
+node e2e/image-worker.check.mjs   # image worker and HEIC import
+node e2e/board.check.mjs          # board: cards, previews, checks, .scs round trip
+node e2e/editor.check.mjs         # editor: crop, focal point, undo
+node e2e/export.check.mjs         # export: zip and folder, clean files, captions.csv, reload
+```

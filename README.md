@@ -8,9 +8,9 @@ Live app: <https://originaltash10.github.io/social-content-studio> (available on
 
 ## Status: early development
 
-The app can now turn a photo into correctly sized images for Instagram and LinkedIn, and lets
-you adjust how each one is cropped, but it is not finished: there is no way yet to save those
-images as files. What works today:
+The app can now turn a photo into correctly sized images for Instagram and LinkedIn, lets you
+adjust how each one is cropped, and saves the images as files, but it is not finished. What works
+today:
 
 - **Sessions.** Create a session, save it, and open it again later. Changes save automatically
   once a session has a folder. Ctrl/Cmd-Z reverses the last change to a card, up to 50 steps
@@ -40,12 +40,23 @@ images as files. What works today:
   Reset crop puts a card back to that automatic crop, and Ctrl/Cmd-Z reverses your last change.
   Cropping in closely enlarges the picture, so the app stops at twice the size and adds a note
   when a picture has been enlarged.
+- **Export.** Choose Export to session folder to save the images into the exports folder inside
+  the session folder, or Download as .zip to get them in one download. Either way, the images
+  go into a folder for each platform (`instagram`, `linkedin`) with a `captions.csv` file that
+  lists each image with its caption, hashtags, first comment, alt text and check result. Every
+  card in the session is included, whatever the board's filters show. Exported images contain
+  only the picture: hidden information, such as camera details and GPS location, is removed.
+  Cards with a Warning are exported, but a card that fails its checks is left out unless you
+  open it and tick "Export this card even though it fails its checks" in Card details.
+  Exporting a card again replaces its own file, but files from earlier exports are never
+  deleted, so older files may still be in the exports folder. Export waits until the board has
+  finished making its previews.
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), which the board and its checks read.
 
 For now every card shows a Warning, because alt text (a description of the image for people
-using screen readers) cannot be written yet. Still to come: saving the images as files
-(export), captions and alt text, text and logos on the image, carousels, and video.
+using screen readers) cannot be written yet. Still to come: captions and alt text, text and
+logos on the image, carousels, and video.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy
@@ -73,9 +84,9 @@ npm test        # run the tests
 npm run build   # build the app into dist/
 ```
 
-To check the board in a real Chrome browser, run `node e2e/board.check.mjs`, and to check the
-editor, run `node e2e/editor.check.mjs` (each needs Playwright with Chromium installed, and
-prints a pass or fail line for each check).
+To check the board in a real Chrome browser, run `node e2e/board.check.mjs`; to check the
+editor, run `node e2e/editor.check.mjs`; and to check export, run `node e2e/export.check.mjs`
+(each needs Playwright with Chromium installed, and prints a pass or fail line for each check).
 
 ## License
 
