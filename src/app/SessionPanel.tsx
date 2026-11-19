@@ -17,20 +17,12 @@ import {
   startAutosave,
 } from '../store/persistence';
 import { useSessionStore } from '../store/sessionStore';
+import { isTyping } from './keys';
 import { buttonClass, focusClass, primaryButtonClass } from './styles';
 
 const DISCARD_PROMPT = 'The open session has unsaved changes. Discard them and continue?';
 const CLEAR_PROMPT =
   'Clear this session? It will be removed from the app. Nothing on disk will be deleted.';
-
-/** True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead. */
-function isTyping(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  );
-}
 
 export function SessionPanel() {
   const session = useSessionStore((state) => state.session);

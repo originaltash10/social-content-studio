@@ -6,6 +6,8 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionPanel } from '../app/SessionPanel';
+import { CardDetails } from '../board/CardDetails';
+import { createDialogUndo } from '../board/dialogUndo';
 import { draftCard } from '../lib/board/cards';
 import { automaticCrop, cropLimits } from '../lib/editor/geometry';
 import { SourcePhotoError } from '../lib/editor/sourcePhoto';
@@ -566,6 +568,86 @@ describe('undo in the editor', () => {
     expect(undoKey(stage(), { key: 'y' }).defaultPrevented).toBe(false);
     expect(undoKey(screen.getByLabelText('A text field')).defaultPrevented).toBe(false);
     expect(store().undoStack).toHaveLength(steps);
+  });
+
+  it('with focus on the real JPG/PNG radios, quality slider or override checkbox, undoes exactly one step per press', async () => {
+    const outside = vi.fn();
+    const hear = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') outside();
+    };
+    window.addEventListener('keydown', hear);
+    // A failing card, so the override is offered beside the file type and quality.
+    act(() => {
+      store().setValidation(card().id, {
+        level: 'fail',
+        issues: [{ rule: 1, level: 'fail', message: 'Wrong size.' }],
+      });
+    });
+    const dialogUndo = createDialogUndo();
+    /** The card details with the editor, sharing one dialog undo, as the board shows them. */
+    function Dialog() {
+      const first = useSessionStore((state) => state.session?.cards[0]);
+      const asset = useSessionStore((state) => state.session?.assets[0]);
+      if (!first || !asset) return null;
+      return (
+        <CardDetails
+          card={first}
+          name="Instagram Feed vertical"
+          fileName="site.jpg"
+          render={undefined}
+          version={{ version: 1, copyIndex: 1, copyCount: 1, isCopy: false, parentVersion: null }}
+          headingId="details"
+          undo={dialogUndo}
+          editor={
+            <Editor
+              card={first as Card & { edit: ImageEdit }}
+              asset={asset}
+              target={TARGET}
+              blob={BLOB}
+              loadPhoto={loadPhoto}
+              undo={dialogUndo}
+            />
+          }
+        />
+      );
+    }
+    await openEditor(
+      <>
+        <SessionPanel />
+        <Dialog />
+      </>,
+    );
+    const slider = () => screen.getByRole('slider', { name: 'Quality' });
+    const radio = (name: string) => screen.getByRole('radio', { name });
+    const checkbox = () => screen.getByRole('checkbox', { name: /^Export this card/ });
+
+    // Four changes, one of each kind.
+    fireEvent.keyDown(slider(), { key: 'ArrowLeft' });
+    fireEvent.keyUp(slider(), { key: 'ArrowLeft' });
+    fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    fireEvent.click(checkbox());
+    fireEvent.click(radio('PNG'));
+    expect(card().edit).toMatchObject({ format: 'png', quality: 0.89 });
+    expect(card().overrideFail).toBe(true);
+    const steps = store().undoStack.length;
+
+    const press = (target: Element, undone: number) => {
+      expect(undoKey(target).defaultPrevented).toBe(true);
+      expect(store().undoStack).toHaveLength(steps - undone);
+    };
+    press(radio('PNG'), 1);
+    expect(card().edit.format).toBe('jpg');
+    press(slider(), 2);
+    expect(card().overrideFail).toBe(false);
+    press(checkbox(), 3);
+    expectCrop(crop(), AUTO);
+    press(radio('JPG'), 4);
+    expect(card().edit.quality).toBe(0.9);
+    // Used up: the card made before the dialog opened stays, wherever the focus is.
+    for (const target of [radio('JPG'), radio('PNG'), slider(), checkbox()]) press(target, 4);
+    expect(store().session?.cards).toHaveLength(1);
+    expect(outside).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', hear);
   });
 
   it('counts a drag and a reset as one step each', async () => {

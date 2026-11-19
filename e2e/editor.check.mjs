@@ -21,6 +21,12 @@
  * changes the duplicate alone, moving the photo's leaves the duplicate alone, one Ctrl-Z
  * reverses each, and a .scs download and reload keeps the duplicate's own point.
  *
+ * Last, the file type and quality in the card dialog: clicking the type the card already has
+ * adds no undo step; choosing PNG makes the card again as a PNG at its size, with the caption
+ * under the preview saying so, and one Ctrl-Z goes back to JPG; and a mouse drag, a touch drag
+ * (real touch input, sent through the DevTools protocol) and a held arrow key on the quality
+ * slider are each one undo step.
+ *
  * Like e2e/board.check.mjs, it needs Playwright with Chromium already installed on the machine,
  * and is not part of `npm test` or the deploy workflow. Nothing it produces is written inside
  * the repository except the normal `dist` build.
@@ -158,7 +164,12 @@ function inspect(page, src) {
   return page.evaluate(async (url) => {
     const blob = await (await fetch(url)).blob();
     const head = new Uint8Array(await blob.slice(0, 3).arrayBuffer());
-    const type = head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff ? 'jpeg' : 'other';
+    const type =
+      head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff
+        ? 'jpeg'
+        : head[0] === 0x89 && head[1] === 0x50 && head[2] === 0x4e
+          ? 'png'
+          : 'other';
     const bitmap = await createImageBitmap(blob);
     const { width, height } = bitmap;
     const canvas = new OffscreenCanvas(width, height);
@@ -751,7 +762,170 @@ async function runEditor(browser, name, url) {
       `saved duplicate focal ${savedCopy?.focal ? `${savedCopy.focal.x.toFixed(3)}, ${savedCopy.focal.y.toFixed(3)}` : 'missing'}; cards with their own point in the file: ${withCopy.cards.filter((c) => Object.hasOwn(c, 'focal')).length} of ${withCopy.cards.length}; photo focal ${withCopy.assets[0].focal.x.toFixed(3)}, ${withCopy.assets[0].focal.y.toFixed(3)}`,
     );
 
-    // 17. Network and console.
+    // 17. File type and quality, on the square card, all in one opening of its dialog.
+    const dialog = page.getByRole('dialog');
+    const jpgRadio = dialog.getByRole('radio', { name: 'JPG' });
+    const pngRadio = dialog.getByRole('radio', { name: 'PNG' });
+    const slider = dialog.getByRole('slider', { name: 'Quality' });
+    const qualityLine = () => dialog.getByText(/^Quality: \d+%$/).innerText();
+    const caption = dialog.getByRole('region', { name: 'Rendered file' }).locator('figcaption');
+    /** Waits for the dialog's caption to describe the card's newest file, and returns it. */
+    async function captionFor(file) {
+      const type = file.type === 'png' ? 'PNG' : 'JPG';
+      await caption
+        .filter({ hasText: `${file.width} × ${file.height} ${type} · ` })
+        .waitFor({ timeout: 60_000 });
+      return caption.innerText();
+    }
+    squareSrc = await tileSrc(page, SQUARE_CARD);
+    await openEditor(page, SQUARE_CARD);
+
+    // 17a. Clicking the file type the card already has is not a change: no undo step.
+    const squareBefore = (await shown(page)).crop;
+    await page.getByRole('application').focus();
+    await page.keyboard.press('Shift+ArrowLeft');
+    if (sameCrop((await shown(page)).crop, squareBefore)) {
+      await page.keyboard.press('Shift+ArrowRight');
+    }
+    const squareMoved = (await shown(page)).crop;
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    const wasJpg = await jpgRadio.isChecked();
+    await jpgRadio.click();
+    await page.keyboard.press('Control+z');
+    const squareUndone = (await shown(page)).crop;
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    check(
+      'clicking the file type the card already has adds no undo step: one Ctrl-Z then undoes the crop move before it',
+      wasJpg &&
+        (await jpgRadio.isChecked()) &&
+        !sameCrop(squareMoved, squareBefore) &&
+        sameCrop(squareUndone, squareBefore),
+      `before ${cropText(squareBefore)}; moved ${cropText(squareMoved)}; after Ctrl-Z ${cropText(squareUndone)}`,
+    );
+
+    // 17b. PNG: the card is made again as a PNG at its size, and the caption says so.
+    await pngRadio.check();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    const pngFile = await inspect(page, squareSrc);
+    const pngCaption = await captionFor(pngFile);
+    const pngNote = await dialog
+      .getByText('PNG files are lossless, so there is no quality setting.')
+      .isVisible();
+    check(
+      'choosing PNG makes the card again as a PNG at its size from platforms.json; the caption says PNG',
+      pngFile.type === 'png' &&
+        pngFile.width === SQUARE.width &&
+        pngFile.height === SQUARE.height &&
+        meets(pngFile, squareBefore) &&
+        pngCaption.startsWith(`${SQUARE.width} × ${SQUARE.height} PNG · `) &&
+        pngNote &&
+        (await slider.count()) === 0,
+      `${describeFile(pngFile, squareBefore)}; caption "${pngCaption}"; note ${pngNote}`,
+    );
+
+    // 17c. One Ctrl-Z, with focus on the PNG radio, goes back to JPG at the quality it had.
+    await pngRadio.focus();
+    await page.keyboard.press('Control+z');
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    const backFile = await inspect(page, squareSrc);
+    const backCaption = await captionFor(backFile);
+    check(
+      'one Ctrl-Z on the PNG radio goes back to JPG at 90%, made again as a JPG',
+      backFile.type === 'jpeg' &&
+        (await jpgRadio.isChecked()) &&
+        (await qualityLine()) === 'Quality: 90%' &&
+        backCaption.startsWith(`${SQUARE.width} × ${SQUARE.height} JPG · `),
+      `${backFile.type} ${backFile.width} × ${backFile.height}; ${await qualityLine()}; caption "${backCaption}"`,
+    );
+
+    // The slider's own position for a percentage, for the drags below.
+    await slider.scrollIntoViewIfNeeded();
+    const track = await slider.boundingBox();
+    const trackY = track.y + track.height / 2;
+    // The thumb's centre runs from half a thumb in from each end; Chromium's is 16 px wide.
+    const trackX = (percent) => track.x + 8 + (track.width - 16) * ((percent - 10) / 90);
+    await page.evaluate(() => {
+      window.__pointerTypes = [];
+      window.addEventListener(
+        'pointerdown',
+        (event) => window.__pointerTypes.push(event.pointerType),
+        true,
+      );
+    });
+
+    // 17d. A mouse drag is one undo step, written on release.
+    await page.mouse.move(trackX(90), trackY);
+    await page.mouse.down();
+    await page.mouse.move(trackX(60), trackY, { steps: 6 });
+    const mouseDuring = await qualityLine();
+    await page.mouse.move(trackX(40), trackY, { steps: 6 });
+    await page.mouse.up();
+    const mouseAfter = await qualityLine();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    const lowFile = await inspect(page, squareSrc);
+    await page.keyboard.press('Control+z');
+    const mouseUndone = await qualityLine();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    check(
+      'a mouse drag on the quality slider shows the value as it moves and is one undo step',
+      mouseDuring !== 'Quality: 90%' &&
+        mouseAfter !== 'Quality: 90%' &&
+        mouseAfter !== mouseDuring &&
+        lowFile.type === 'jpeg' &&
+        lowFile.bytes < backFile.bytes &&
+        mouseUndone === 'Quality: 90%',
+      `during "${mouseDuring}", after "${mouseAfter}" (${lowFile.bytes} bytes against ${backFile.bytes} at 90%), after one Ctrl-Z "${mouseUndone}"`,
+    );
+
+    // 17e. A touch drag, sent as real touch input, is one undo step too.
+    const cdp = await context.newCDPSession(page);
+    const touch = (type, x) =>
+      cdp.send('Input.dispatchTouchEvent', {
+        type,
+        touchPoints: type === 'touchEnd' ? [] : [{ x, y: trackY }],
+      });
+    await touch('touchStart', trackX(90));
+    for (let i = 1; i <= 8; i++) await touch('touchMove', trackX(90 - (55 * i) / 8));
+    const touchDuring = await qualityLine();
+    await touch('touchEnd');
+    const touchAfter = await qualityLine();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    await page.keyboard.press('Control+z');
+    const touchUndone = await qualityLine();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    const pointerTypes = await page.evaluate(() => window.__pointerTypes);
+    check(
+      'a touch drag on the quality slider is one undo step',
+      pointerTypes.at(-1) === 'touch' &&
+        touchDuring === 'Quality: 35%' &&
+        touchAfter === 'Quality: 35%' &&
+        touchUndone === 'Quality: 90%',
+      `pointer types ${pointerTypes.join(', ')}; during "${touchDuring}", after "${touchAfter}", after one Ctrl-Z "${touchUndone}"`,
+    );
+
+    // 17f. A key held down is one undo step; with nothing left, Ctrl-Z changes nothing.
+    await slider.focus();
+    for (let i = 0; i < 3; i++) await page.keyboard.down('ArrowLeft');
+    const heldDuring = await qualityLine();
+    await page.keyboard.up('ArrowLeft');
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    await page.keyboard.press('Control+z');
+    const heldUndone = await qualityLine();
+    squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
+    await page.keyboard.press('Control+z');
+    const spareCrop = (await shown(page)).crop;
+    check(
+      'a held arrow key on the slider is one undo step; once the dialog’s steps are used up, Ctrl-Z changes nothing',
+      heldDuring === 'Quality: 87%' &&
+        heldUndone === 'Quality: 90%' &&
+        (await qualityLine()) === 'Quality: 90%' &&
+        (await jpgRadio.isChecked()) &&
+        sameCrop(spareCrop, squareBefore),
+      `held "${heldDuring}", after one Ctrl-Z "${heldUndone}", after another "${await qualityLine()}", crop ${cropText(spareCrop)}`,
+    );
+    await closeEditor(page);
+
+    // 18. Network and console.
     const outside = requests.filter((r) => !r.url.startsWith(url) && !/^(blob|data):/.test(r.url));
     check(
       `every request stays under ${url}`,

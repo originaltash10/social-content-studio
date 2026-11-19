@@ -14,12 +14,13 @@
  *   {session}_{platform}_{placement}_{cardId}.{ext} in per-platform folders, each a valid JPG at
  *   the size in src/data/platforms.json, with no EXIF, GPS, XMP, ICC, comment or other hidden
  *   data (read with this file's own parser, not the app's), and a captions.csv that lists them;
- * - PNG: the session is downloaded as .scs, one card's format is set to PNG in session.json (the
- *   app has no format control yet), and the reloaded session exports a valid PNG with only
- *   IHDR, IDAT and IEND chunks;
- * - the override: in the same edit, the other card gets a caption one character over its cap
- *   (no generated photo can make a card fail: every render is the exact size and these
- *   placements have no file-size cap). That card is left out of the zip with its reason; after
+ * - PNG: one card is set to PNG with the File type control in its card details, and the session
+ *   saved as .scs keeps it. After a reload it exports a valid PNG at its size whose chunks are all
+ *   in the export's allowlist (IHDR, PLTE, tRNS, IDAT, IEND), with IHDR, IDAT and IEND present;
+ * - the override: the .scs is edited to give the other card a caption one character over its cap
+ *   (the app has no caption editing yet, and no generated photo can make a card fail: every
+ *   render is the exact size and these placements have no file-size cap). That card is left out
+ *   of the zip with its reason; after
  *   ticking "Export this card even though it fails its checks" it is exported and captions.csv
  *   says "Fail, exported with override";
  * - "Export to session folder", with the folder picker replaced by a browser-private (OPFS)
@@ -28,6 +29,9 @@
  *   card is listed as changed, its earlier file is left exactly as it was, and captions.csv
  *   lists only the file that was written;
  * - the session survives a reload ("Reopen last"), with the exported files still there;
+ * - JPG quality: in a new session, a photo of fine random noise (made in the browser) is exported
+ *   at 30% and at 95% quality, set with the quality slider; the 30% file is less than half the
+ *   size of the 95% one, and both are clean JPGs at their size;
  * - every request stays under the app's own address, with no failed requests and no console
  *   errors.
  *
@@ -187,6 +191,43 @@ async function makePhoto(page) {
   return Buffer.from(base64, 'base64');
 }
 
+/**
+ * A photo of fine random noise, drawn in the browser: the hardest kind of picture to compress,
+ * so JPG quality makes a large, reliable difference to file size. The noise comes from a fixed
+ * seed, so every run makes the same photo. Large enough that the Feed vertical crop is not
+ * enlarged (which would smooth the noise). No metadata.
+ */
+async function makeNoisePhoto(page) {
+  const base64 = await page.evaluate(async () => {
+    const width = 2160;
+    const height = 2700;
+    const canvas = new OffscreenCanvas(width, height);
+    const g = canvas.getContext('2d');
+    const image = g.createImageData(width, height);
+    let seed = 0x2545f491;
+    for (let i = 0; i < image.data.length; i += 4) {
+      // xorshift32
+      seed ^= seed << 13;
+      seed ^= seed >>> 17;
+      seed ^= seed << 5;
+      image.data[i] = seed & 0xff;
+      image.data[i + 1] = (seed >>> 8) & 0xff;
+      image.data[i + 2] = (seed >>> 16) & 0xff;
+      image.data[i + 3] = 255;
+    }
+    g.putImageData(image, 0, 0);
+    const bytes = new Uint8Array(
+      await (await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.95 })).arrayBuffer(),
+    );
+    let text = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(text);
+  });
+  return Buffer.from(base64, 'base64');
+}
+
 /** Decodes an image in the browser and returns its size in pixels, or null if it will not open. */
 async function decodedSize(page, bytes) {
   return page.evaluate(async (base64) => {
@@ -274,23 +315,34 @@ function jpegFindings(bytes) {
   }
 }
 
-/** Lists a PNG's chunks. Returns any chunk other than IHDR, PLTE, tRNS, IDAT and IEND. */
-function pngFindings(bytes) {
+/** The chunks the export keeps in a PNG; anything else is hidden data. */
+const PNG_ALLOWED = ['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'];
+/** The chunks every PNG must have. */
+const PNG_REQUIRED = ['IHDR', 'IDAT', 'IEND'];
+
+/** Lists a PNG's chunk types, in order, with "damaged" or "not a PNG" when it cannot be read. */
+function pngChunks(bytes) {
   const signature = [137, 80, 78, 71, 13, 10, 26, 10];
   if (!signature.every((value, index) => bytes[index] === value)) return ['not a PNG'];
-  const found = [];
+  const chunks = [];
   let i = 8;
   for (;;) {
-    if (i + 12 > bytes.length) return [...found, 'damaged'];
+    if (i + 12 > bytes.length) return [...chunks, 'damaged'];
     const length = bytes.readUInt32BE(i);
     const type = bytes.toString('latin1', i + 4, i + 8);
-    if (!['IHDR', 'PLTE', 'tRNS', 'IDAT', 'IEND'].includes(type)) found.push(type);
+    chunks.push(type);
     i += 12 + length;
-    if (type === 'IEND') {
-      if (i < bytes.length) found.push('data after the end');
-      return found;
-    }
+    if (type === 'IEND') return i < bytes.length ? [...chunks, 'data after the end'] : chunks;
   }
+}
+
+/** A PNG's findings: any chunk outside the allowlist, and any required chunk that is missing. */
+function pngFindings(bytes) {
+  const chunks = pngChunks(bytes);
+  return [
+    ...new Set(chunks.filter((type) => !PNG_ALLOWED.includes(type))),
+    ...PNG_REQUIRED.filter((type) => !chunks.includes(type)).map((type) => `no ${type}`),
+  ];
 }
 
 /** Text that only hidden data would contain. */
@@ -512,7 +564,18 @@ async function runExportCheck(browser, name, url) {
       firstText.replace(/\s+/g, ' '),
     );
 
-    // 3. PNG and the override: edit the session file, as the app has no controls for these yet.
+    // 3. PNG with the File type control in the card details.
+    await page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true }).click();
+    const fileType = page.getByRole('dialog').getByRole('group', { name: 'File type' });
+    await fileType.getByRole('radio', { name: 'PNG' }).check();
+    const pngChosen =
+      (await fileType.getByRole('radio', { name: 'PNG' }).isChecked()) &&
+      (await page.getByRole('dialog').getByRole('slider', { name: 'Quality' }).count()) === 0;
+    await page.keyboard.press('Escape');
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await waitForRendered(2);
+
+    // The override: edit the session file for the caption only, as the app cannot edit captions yet.
     const [bundle] = await Promise.all([
       page.waitForEvent('download'),
       page.getByRole('button', { name: 'Download .scs' }).click(),
@@ -523,7 +586,11 @@ async function runExportCheck(browser, name, url) {
     const session = JSON.parse(await sessionZip.file('session.json').async('string'));
     const feedCard = session.cards.find((card) => card.placement === 'feed-vertical');
     const squareCard = session.cards.find((card) => card.placement === 'image-square');
-    feedCard.edit.format = 'png';
+    check(
+      'PNG chosen with the File type control is saved in the session; the .scs edit is the caption only',
+      pngChosen && feedCard.edit.format === 'png' && squareCard.edit.format === 'jpg',
+      `feed card ${feedCard.edit.format}, square card ${squareCard.edit.format}`,
+    );
     squareCard.copy.caption = 'x'.repeat(SQUARE.captionCap + 1);
     sessionZip.file('session.json', JSON.stringify(session, null, 2));
     const editedPath = join(outDir, `${name}-session-edited.scs`);
@@ -553,11 +620,21 @@ async function runExportCheck(browser, name, url) {
         leftOut.startsWith(`${SQUARE_CARD}: fails its checks.`),
       leftOut,
     );
-    await checkFiles('PNG zip', second.files, {
+    const { inspected: pngInspected } = await checkFiles('PNG zip', second.files, {
       count: 1,
       types: { instagram: 'png' },
       results: ['Warning'],
     });
+    const pngPath = pngInspected[0]?.path;
+    const chunks = pngPath ? pngChunks(second.files.get(pngPath)) : [];
+    check(
+      'PNG zip: every chunk is in the allowlist (IHDR, PLTE, tRNS, IDAT, IEND), with IHDR, IDAT and IEND present, and it opens at its size',
+      chunks.length > 0 &&
+        chunks.every((type) => PNG_ALLOWED.includes(type)) &&
+        PNG_REQUIRED.every((type) => chunks.includes(type)) &&
+        pngInspected[0]?.sizeOk === true,
+      `chunks from Chrome: ${[...new Set(chunks)].join(', ')} (${chunks.length} in all); ${pngInspected[0]?.size?.width}x${pngInspected[0]?.size?.height}`,
+    );
 
     await page.getByRole('button', { name: `Open ${SQUARE_CARD}`, exact: true }).click();
     const overrideBox = page.getByRole('checkbox', { name: OVERRIDE_LABEL });
@@ -676,7 +753,66 @@ async function runExportCheck(browser, name, url) {
       `${cardsAfterReload.join('; ')}; exports: ${[...afterReload.keys()].join(', ')}`,
     );
 
-    // 7. Network and console.
+    // 7. JPG quality: the same card at 30% and at 95%, from a photo of fine noise.
+    await page.getByRole('button', { name: 'Clear session' }).click();
+    await page.getByText('No session is open.').waitFor();
+    await page.getByLabel('Name').fill(SESSION_NAME);
+    await page.getByRole('button', { name: 'New session' }).click();
+    const NOISE = 'quality-check.jpg';
+    const noiseCard = `Instagram Feed vertical for ${NOISE}, v1`;
+    await page.getByLabel('Photos to import').setInputFiles({
+      name: NOISE,
+      mimeType: 'image/jpeg',
+      buffer: await makeNoisePhoto(page),
+    });
+    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+    await page.getByRole('button', { name: 'Create cards' }).click();
+    const noiseForm = page.getByRole('form', { name: 'Create cards' });
+    await noiseForm.getByRole('checkbox', { name: /^Feed vertical \(/ }).check();
+    await noiseForm.getByRole('button', { name: 'Create' }).click();
+    await waitForRendered(1);
+    /** Sets the card's quality with the slider's keys, then exports it as a zip. */
+    async function exportAtQuality(keys, percent) {
+      await page.getByRole('button', { name: `Open ${noiseCard}`, exact: true }).click();
+      const quality = page.getByRole('dialog').getByRole('slider', { name: 'Quality' });
+      await quality.focus();
+      for (const key of keys) await page.keyboard.press(key);
+      const shownText = await page
+        .getByRole('dialog')
+        .getByText(/^Quality: \d+%$/)
+        .innerText();
+      await page.keyboard.press('Escape');
+      await page.getByRole('dialog').waitFor({ state: 'hidden' });
+      await waitForRendered(1);
+      const { files } = await downloadZip(`quality-${percent}`);
+      const path = [...files.keys()].find((entry) => entry !== 'captions.csv');
+      const csv = readCsv(files.get('captions.csv'));
+      return {
+        shownText,
+        file: await inspectImage(page, path, files.get(path)),
+        bytes: files.get(path).length,
+        listed: csv.rows.length === 1 && csv.rows[0][0] === path,
+      };
+    }
+    const low = await exportAtQuality(['Home', 'PageUp', 'PageUp'], 30);
+    const high = await exportAtQuality(['End', ...Array(5).fill('ArrowLeft')], 95);
+    const good = (result) =>
+      result.file.type === 'jpg' &&
+      result.file.extensionMatches &&
+      result.file.sizeOk &&
+      result.file.findings.length === 0 &&
+      result.listed;
+    check(
+      'a JPG exported at 30% quality is less than half the size of the same card at 95%; both clean, at size, and in captions.csv',
+      low.shownText === 'Quality: 30%' &&
+        high.shownText === 'Quality: 95%' &&
+        good(low) &&
+        good(high) &&
+        low.bytes < high.bytes / 2,
+      `30%: ${low.bytes} bytes; 95%: ${high.bytes} bytes (${(low.bytes / high.bytes).toFixed(2)} of it); ${low.file.size?.width}x${low.file.size?.height}`,
+    );
+
+    // 8. Network and console.
     const outside = requests.filter((r) => !r.startsWith(url) && !/^(blob|data):/.test(r));
     check(
       `every request stays under ${url}`,

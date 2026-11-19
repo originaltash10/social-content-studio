@@ -6,7 +6,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { useSessionStore } from '../store/sessionStore';
 import { hash, makeAsset, makeCard } from '../test/fixtures';
-import type { ValidationResult } from '../types';
+import type { Card, ValidationResult } from '../types';
 import { CardDetails, OVERRIDE_LABEL, OVERRIDE_NOT_NEEDED } from './CardDetails';
 
 const PHOTO = makeAsset({ id: hash('a'), fileName: 'site.jpg' });
@@ -123,5 +123,61 @@ describe('the export override', () => {
     expect(checkbox()).not.toBeChecked();
     // Nothing else was changed along the way.
     expect(card()?.validation).toEqual(FAIL);
+  });
+});
+
+describe('the file type and quality', () => {
+  function Details({ editor }: { editor?: boolean }) {
+    const current = useSessionStore((state) => state.session?.cards[0]);
+    if (!current) return null;
+    return (
+      <CardDetails
+        card={current}
+        name="Instagram Feed vertical"
+        fileName="site.jpg"
+        render={undefined}
+        version={{ version: 1, copyIndex: 1, copyCount: 1, isCopy: false, parentVersion: null }}
+        headingId="details"
+        editor={editor ? <div>The editor</div> : undefined}
+      />
+    );
+  }
+
+  function open(editor: boolean, edit?: Card['edit']) {
+    act(() => {
+      store().createSession('File type test');
+      const { id, version, parentId, ...draft } = makeCard({
+        assetIds: [PHOTO.id],
+        ...(edit ? { edit } : {}),
+      });
+      void [id, version, parentId]; // the store gives these
+      store().addCard(draft);
+    });
+    render(<Details editor={editor} />);
+  }
+
+  it('are shown for a card the editor can open', () => {
+    open(true);
+    expect(screen.getByRole('group', { name: 'File type' })).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Quality' })).toBeInTheDocument();
+  });
+
+  it('change the card as one undo step, without a dialog undo too', () => {
+    open(true);
+    const steps = store().undoStack.length;
+    fireEvent.click(screen.getByRole('radio', { name: 'PNG' }));
+    expect(card()?.edit).toMatchObject({ format: 'png' });
+    expect(store().undoStack).toHaveLength(steps + 1);
+  });
+
+  it('are not shown for a card without the editor, which cannot be made into a file', () => {
+    open(false);
+    expect(screen.queryByRole('group', { name: 'File type' })).toBeNull();
+    expect(screen.queryByRole('slider')).toBeNull();
+  });
+
+  it('are not shown for a card that is not a single image', () => {
+    open(true, { slides: [], coverIndex: 0 });
+    expect(screen.queryByRole('group', { name: 'File type' })).toBeNull();
   });
 });

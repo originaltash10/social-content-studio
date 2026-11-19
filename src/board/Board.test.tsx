@@ -17,6 +17,7 @@ import type { PlacementSpec } from '../types';
 import { LOADING_TEXT } from '../editor/Editor';
 import { SourcePhotoError } from '../lib/editor/sourcePhoto';
 import type { DisplayPhoto, SourcePhotoInput } from '../lib/editor/sourcePhoto';
+import { SessionPanel } from '../app/SessionPanel';
 import { Board, NO_CARDS_TEXT, NO_MATCH_TEXT, NO_PHOTOS_TEXT, NO_SESSION_TEXT } from './Board';
 
 // ---------------------------------------------------------------------------
@@ -508,6 +509,29 @@ describe('duplicate and versions', () => {
     await sent(3);
     expect(client.cancelled).toEqual([]);
   });
+
+  it('copies the file type and quality, and starts the copy with the override off', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        if ('format' in card.edit) {
+          card.edit.format = 'png';
+          card.edit.quality = 0.55;
+        }
+        card.overrideFail = true;
+      });
+    });
+    fireEvent.click(button('Duplicate Instagram Feed vertical for site.jpg, v1'));
+    const copy = store().session?.cards[1];
+    expect(copy?.edit).toMatchObject({ format: 'png', quality: 0.55 });
+    expect(copy?.overrideFail).toBe(false);
+    // The copy is made as PNG too.
+    await sent(2);
+    expect(client.calls.map((call) => call.job.plan.format)).toEqual(['png', 'png']);
+  });
 });
 
 describe('the details dialog', () => {
@@ -585,11 +609,17 @@ describe('the details dialog', () => {
     const first = within(file()).getByRole('img');
     expect(first).toHaveAttribute('src', 'blob:render-1');
     expect(first).toHaveAttribute('alt', 'Preview of site.jpg for Instagram Feed vertical');
+    // Under it, the file's size, type and file size, as in the File row.
+    expect(within(file()).getByRole('figure')).toHaveTextContent(
+      `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 400 KB`,
+    );
 
     // A change in the editor starts a new render: progress shows until its file is ready.
     fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
     await sent(2);
     expect(within(file()).queryByRole('img')).toBeNull();
+    // No caption without a file: the progress shows instead.
+    expect(within(file()).queryByRole('figure')).toBeNull();
     expect(file()).toHaveTextContent('Waiting to render');
     act(() => client.calls[1]?.onProgress('drawing'));
     const bar = within(file()).getByRole('progressbar', {
@@ -597,9 +627,12 @@ describe('the details dialog', () => {
     });
     expect(bar).toHaveAttribute('aria-valuenow', '60');
     expect(bar).toHaveAttribute('aria-valuetext', 'Cropping and resizing');
-    answer(1);
+    answer(1, { bytes: 1_234_567 });
     await idle();
     expect(within(file()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(within(file()).getByRole('figure')).toHaveTextContent(
+      `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 1.2 MB`,
+    );
     expect(within(file()).queryByRole('progressbar')).toBeNull();
 
     // Cancelled, then failed: no picture, and it says why.
@@ -709,6 +742,9 @@ describe('the details dialog', () => {
       const dialog = screen.getByRole('dialog') as HTMLDialogElement;
       expect(dialog).toHaveTextContent('No preview yet.');
       expect(within(dialog).queryByRole('status')).toBeNull();
+      // No file can be made for it, so it has no file type or quality to change.
+      expect(within(dialog).queryByRole('group', { name: 'File type' })).toBeNull();
+      expect(within(dialog).queryByRole('slider')).toBeNull();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     }
     expect(photoLoads).toHaveLength(0);
@@ -787,6 +823,76 @@ describe('the details dialog', () => {
     expect(store().dirty).toBe(false);
   });
 
+  it('renders the card again as PNG when PNG is chosen, and as JPG at the new quality', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const fileRow = () => within(dialog).getByText(/^\d+ × \d+ (JPG|PNG) · /, { selector: 'dd' });
+    const caption = () =>
+      within(within(dialog).getByRole('region', { name: 'Rendered file' })).getByRole('figure');
+    const { width, height } = sizeOf(FEED);
+    expect(fileRow()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+    expect(caption()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+    expect(store().dirty).toBe(true);
+    act(() => store().markSaved(store().revision));
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'PNG' }));
+    // The card is changed (so autosave picks it up) and a new file is asked for, as PNG.
+    expect(store().dirty).toBe(true);
+    await sent(2);
+    expect(client.calls[1]?.job.plan).toMatchObject({ format: 'png', target: { width, height } });
+    expect(article(/v1/)).toHaveTextContent('Not checked yet');
+    answer(1, {
+      blob: new Blob(['png'], { type: 'image/png' }),
+      mimeType: 'image/png',
+      format: 'png',
+      bytes: 1_200_000,
+    });
+    await idle();
+    expect(fileRow()).toHaveTextContent(`${width} × ${height} PNG · 1.2 MB`);
+    // The caption under the preview follows the new file.
+    expect(caption()).toHaveTextContent(`${width} × ${height} PNG · 1.2 MB`);
+    expect(within(caption()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(article(/v1/)).toHaveTextContent('Warning');
+
+    // Back to JPG, then the quality: each is a new file at the placement's size.
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'JPG' }));
+    await sent(3);
+    expect(client.calls[2]?.job.plan).toMatchObject({ format: 'jpg', quality: 0.9 });
+    answer(2);
+    await idle();
+    const slider = within(dialog).getByRole('slider', { name: 'Quality' });
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    fireEvent.keyUp(slider, { key: 'PageDown' });
+    await sent(4);
+    expect(client.calls[3]?.job.plan).toMatchObject({
+      format: 'jpg',
+      quality: 0.8,
+      target: { width, height },
+    });
+  });
+
+  it('undoes exactly a file type change with one Ctrl/Cmd-Z while its radio has focus', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const png = within(dialog).getByRole('radio', { name: 'PNG' });
+    fireEvent.click(png);
+    png.focus();
+    const steps = store().undoStack.length;
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      png.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 1);
+    expect(store().session?.cards[0]?.edit).toMatchObject({ format: 'jpg', quality: 0.9 });
+    expect(within(dialog).getByRole('radio', { name: 'JPG' })).toBeChecked();
+  });
+
   it('closes when undo removes its card, and moves focus to the board heading', async () => {
     const { dialog } = await openDetails();
     act(() => {
@@ -794,6 +900,116 @@ describe('the details dialog', () => {
     });
     expect(dialog.open).toBe(false);
     expect(screen.getByRole('heading', { name: 'Board' })).toHaveFocus();
+  });
+});
+
+describe('undo in the dialog', () => {
+  const OVERRIDE = /^Export this card even though it fails its checks/;
+
+  /** Sends Ctrl/Cmd-Z to `target` and returns the event. */
+  function undoKey(target: Element) {
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  /** Opens the dialog of a card that fails its checks, with the app-wide undo also listening. */
+  async function openFailing() {
+    openSession(PHOTO);
+    render(
+      <>
+        <SessionPanel />
+        <Board createClient={createClient} onController={onController} loadPhoto={loadPhoto} />
+      </>,
+    );
+    createCards('Feed vertical');
+    await sent(1);
+    // Ten pixels narrow, so rule 1 fails and the override is offered.
+    answer(0, { width: sizeOf(FEED).width - 10 });
+    await idle();
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    await showPhoto();
+    // Stands for any other undo listener: it hears only the Ctrl/Cmd-Z presses that get past.
+    const outside = vi.fn();
+    const hear = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') outside();
+    };
+    window.addEventListener('keydown', hear);
+    return { dialog, outside, stop: () => window.removeEventListener('keydown', hear) };
+  }
+
+  it('with focus on the override checkbox, one press undoes exactly one dialog change', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    const cardOf = () => store().session?.cards[0];
+    const cropBefore = cardOf()?.edit;
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    const checkbox = within(dialog).getByRole('checkbox', { name: OVERRIDE });
+    fireEvent.click(checkbox);
+    checkbox.focus();
+    const steps = store().undoStack.length;
+    expect(cardOf()?.overrideFail).toBe(true);
+
+    // The tick is undone, and only the tick.
+    const first = undoKey(checkbox);
+    expect(first.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 1);
+    expect(cardOf()?.overrideFail).toBe(false);
+    expect(cardOf()?.edit).not.toEqual(cropBefore);
+
+    // Then the crop move.
+    undoKey(checkbox);
+    expect(store().undoStack).toHaveLength(steps - 2);
+    expect(cardOf()?.edit).toEqual(cropBefore);
+
+    // Nothing left that the dialog did: the press is stopped and changes nothing, so the card
+    // made before the dialog opened is still there.
+    const spare = undoKey(checkbox);
+    expect(spare.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 2);
+    expect(store().session?.cards).toHaveLength(1);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('with no change made in the dialog, a press does nothing, wherever the focus is', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    const steps = store().undoStack.length;
+    const before = store().session;
+    for (const target of [
+      within(dialog).getByRole('checkbox', { name: OVERRIDE }),
+      within(dialog).getByRole('application'),
+      document.body,
+    ]) {
+      expect(undoKey(target).defaultPrevented).toBe(true);
+    }
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().session).toBe(before);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('starts again from nothing each time the dialog opens', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: OVERRIDE }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    await showPhoto();
+    const reopened = screen.getByRole('dialog');
+    const steps = store().undoStack.length;
+    undoKey(within(reopened).getByRole('checkbox', { name: OVERRIDE }));
+    // The tick was made the last time the dialog was open, so it stays.
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().session?.cards[0]?.overrideFail).toBe(true);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
   });
 });
 

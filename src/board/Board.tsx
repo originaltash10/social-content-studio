@@ -38,6 +38,7 @@ import { buttonClass, focusClass } from '../app/styles';
 import { Editor } from '../editor/Editor';
 import type { PhotoLoader } from '../editor/useSourcePhoto';
 import { CardDetails } from './CardDetails';
+import { createDialogUndo } from './dialogUndo';
 import { CardTile } from './CardTile';
 import { CreateCards } from './CreateCards';
 
@@ -159,6 +160,14 @@ export function Board({
     setOpenId(null);
   }
 
+  // Each opening of the dialog gets its own undo: Ctrl/Cmd-Z there reverses only its changes.
+  const [undoFor, setUndoFor] = useState(openId);
+  const [dialogUndo, setDialogUndo] = useState(createDialogUndo);
+  if (undoFor !== openId) {
+    setUndoFor(openId);
+    setDialogUndo(createDialogUndo());
+  }
+
   // Show or close the dialog to match the open card. If the card goes away (undo), close it.
   useEffect(() => {
     const element = dialog.current;
@@ -201,6 +210,7 @@ export function Board({
         target={target}
         blob={missingAssetIds.includes(asset.id) ? undefined : getAssetBlob(asset.id)}
         loadPhoto={loadPhoto}
+        undo={dialogUndo}
       />
     );
   }
@@ -365,6 +375,7 @@ export function Board({
               render={renders.get(openCard.id)}
               version={versions.get(openCard.id) as VersionInfo}
               headingId={dialogHeadingId}
+              undo={dialogUndo}
             />
             <div>
               <button type="button" className={buttonClass} onClick={() => dialog.current?.close()}>

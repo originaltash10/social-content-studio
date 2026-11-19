@@ -6,6 +6,10 @@
  * A card whose latest result is Fail also shows the export override (SPEC.md: "Fail blocks
  * export unless overridden"). It stays visible while the override is ticked, so it can always be
  * unticked, even after the card stops failing.
+ *
+ * A card the editor can open also shows its file type (JPG or PNG) and JPG quality. A card
+ * without the editor (its photo is not in the session, or it is not a single-photo card) cannot
+ * be made into a file, so it has no file settings to change either.
  */
 
 import type { ReactNode } from 'react';
@@ -22,9 +26,12 @@ import {
   resultOf,
   upscaledNote,
 } from '../lib/board/view';
+import { isImageEdit } from '../lib/board/renderValidation';
 import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
+import type { DialogUndo } from './dialogUndo';
+import { FileTypeControls } from './FileTypeControls';
 import { ResultBadge } from './ResultBadge';
 
 export type CardDetailsProps = {
@@ -36,7 +43,12 @@ export type CardDetailsProps = {
   headingId: string;
   /** The editor for this card. Without one, the rendered preview is shown instead. */
   editor?: ReactNode;
+  /** The dialog's undo; each change made here is recorded as one of the dialog's steps. */
+  undo?: DialogUndo;
 };
+
+/** Without a dialog undo, a change is simply made. */
+const runChange = (change: () => void) => change();
 
 export const OVERRIDE_LABEL = 'Export this card even though it fails its checks';
 export const OVERRIDE_NOT_NEEDED =
@@ -53,7 +65,9 @@ export function CardDetails({
   version,
   headingId,
   editor,
+  undo,
 }: CardDetailsProps) {
+  const record = undo?.record ?? runChange;
   const done = render?.kind === 'done' ? render : null;
   const issues = card.validation.issues;
   return (
@@ -112,6 +126,10 @@ export function CardDetails({
             )}
           </section>
 
+          {editor !== undefined && isImageEdit(card.edit) && (
+            <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
+          )}
+
           {(card.validation.level === 'fail' || card.overrideFail) && (
             <section aria-label="Export override" className="flex flex-col gap-1">
               <label className="flex items-start gap-2">
@@ -121,9 +139,11 @@ export function CardDetails({
                   checked={card.overrideFail}
                   onChange={(event) => {
                     const checked = event.target.checked;
-                    // One change, so one undo step.
-                    useSessionStore.getState().updateCard(card.id, (draft) => {
-                      draft.overrideFail = checked;
+                    // One change, so one undo step, which the dialog's Ctrl/Cmd-Z can reverse.
+                    record(() => {
+                      useSessionStore.getState().updateCard(card.id, (draft) => {
+                        draft.overrideFail = checked;
+                      });
                     });
                   }}
                 />
@@ -139,11 +159,17 @@ export function CardDetails({
             <section aria-label="Rendered file" className="flex flex-col gap-2">
               <h3 className="font-heading font-semibold">Rendered file</h3>
               {done ? (
-                <img
-                  src={done.url}
-                  alt={previewAlt(card, fileName, name)}
-                  className="max-h-48 self-start rounded-control bg-page object-contain"
-                />
+                // The file's type and size under it, so a change of file type or quality shows.
+                <figure className="flex flex-col gap-1 self-start">
+                  <img
+                    src={done.url}
+                    alt={previewAlt(card, fileName, name)}
+                    className="max-h-48 self-start rounded-control bg-page object-contain"
+                  />
+                  <figcaption className="text-label text-muted-text">
+                    {renderedFileLabel(done)}
+                  </figcaption>
+                </figure>
               ) : isPending(render) ? (
                 <div className="flex flex-col gap-1">
                   <div

@@ -4,13 +4,13 @@ Social Content Studio is a browser-only app that prepares images and video for I
 LinkedIn, Facebook and X: the right size and shape for each placement, with captions checked
 against each platform's rules.
 
-Live app: <https://originaltash10.github.io/social-content-studio> (available once published)
+Live app: <https://originaltash10.github.io/social-content-studio>
 
-## Status: early development
+## Status: Phase 1 complete
 
-The app can now turn a photo into correctly sized images for Instagram and LinkedIn, lets you
-adjust how each one is cropped, and saves the images as files, but it is not finished. What works
-today:
+The first phase of the plan is complete: the app turns a photo into correctly sized images for
+Instagram and LinkedIn, lets you adjust how each one is cropped and choose JPG or PNG, and saves
+the images as files. The app as a whole is not finished. What works today:
 
 - **Sessions.** Create a session, save it, and open it again later. Changes save automatically
   once a session has a folder. Ctrl/Cmd-Z reverses the last change to a card, up to 50 steps
@@ -40,6 +40,12 @@ today:
   Reset crop puts a card back to that automatic crop, and Ctrl/Cmd-Z reverses your last change.
   Cropping in closely enlarges the picture, so the app stops at twice the size and adds a note
   when a picture has been enlarged.
+- **File type and quality.** Open a card to choose whether its image is saved as a JPG or a PNG.
+  JPG is the default and makes smaller files; for a JPG, the Quality slider (10% to 100%, 90% to
+  start with) trades file size against detail. PNG files are lossless, so they have no quality
+  setting, and they are usually larger. Under the preview, the card shows the size and type of
+  the file it made, for example "1080 × 1350 JPG · 412 KB", so you can see the effect of a
+  change. Ctrl/Cmd-Z reverses a change of file type, or a whole move of the slider, in one step.
 - **Export.** Choose Export to session folder to save the images into the exports folder inside
   the session folder, or Download as .zip to get them in one download. Either way, the images
   go into a folder for each platform (`instagram`, `linkedin`) with a `captions.csv` file that
@@ -49,8 +55,9 @@ today:
   Cards with a Warning are exported, but a card that fails its checks is left out unless you
   open it and tick "Export this card even though it fails its checks" in Card details.
   Exporting a card again replaces its own file, but files from earlier exports are never
-  deleted, so older files may still be in the exports folder. Export waits until the board has
-  finished making its previews.
+  deleted, so older files may still be in the exports folder. If you change a card's file type
+  and export again, the old file also stays and is not listed in `captions.csv`, so delete it
+  yourself if you don't want it. Export waits until the board has finished making its previews.
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), which the board and its checks read.
 
