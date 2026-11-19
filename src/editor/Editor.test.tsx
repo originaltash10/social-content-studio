@@ -443,8 +443,15 @@ describe('plus and minus', () => {
     fireEvent.keyDown(stage(), { key: 'Add' });
     expect(crop().width).toBeCloseTo(0.51, 10);
     fireEvent.keyDown(stage(), { key: '+', shiftKey: true });
-    // Back at the largest crop, which is the automatic one.
-    expectCrop(crop(), AUTO);
+    // 10% wider again, about the same centre. That is past the crop that fills the frame, so
+    // it is taller than the photo and has padding above and below.
+    expectCrop(crop(), {
+      x: 0.195,
+      y: (1 - 0.61 * LIMITS.shape) / 2,
+      width: 0.61,
+      height: 0.61 * LIMITS.shape,
+    });
+    expect(crop().height).toBeGreaterThan(1);
     expect(store().undoStack).toHaveLength(before.undo + 5);
     const ratio = (crop().width * SOURCE.width) / (crop().height * SOURCE.height);
     expect(ratio).toBeCloseTo(TARGET.width / TARGET.height, 10);
@@ -452,11 +459,17 @@ describe('plus and minus', () => {
 
   it('write nothing at the largest or the smallest size', async () => {
     await openEditor();
-    const before = snapshot();
+    // The largest size is the fit size, which shows the whole photo.
+    for (let press = 0; press < 6; press++) {
+      fireEvent.keyDown(stage(), { key: '=', shiftKey: true });
+    }
+    expect(crop().width).toBeCloseTo(LIMITS.max.width, 10);
+    expect(crop().width).toBeGreaterThan(AUTO.width);
+    const atLargest = snapshot();
     fireEvent.keyDown(stage(), { key: '+' });
     fireEvent.keyDown(stage(), { key: '=', shiftKey: true });
-    expectUntouched(before);
-    for (let press = 0; press < 6; press++) {
+    expectUntouched(atLargest);
+    for (let press = 0; press < 12; press++) {
       fireEvent.keyDown(stage(), { key: 'Subtract', shiftKey: true });
     }
     expect(crop().width).toBeCloseTo(LIMITS.min.width, 10);

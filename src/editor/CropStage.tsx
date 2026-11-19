@@ -154,6 +154,7 @@ export function CropStage(props: CropStageProps) {
           current.from,
           (event.clientX - current.startX) / box.width,
           (event.clientY - current.startY) / box.height,
+          limits,
         ),
       );
       return;

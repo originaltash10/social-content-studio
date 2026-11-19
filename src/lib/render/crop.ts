@@ -1,19 +1,34 @@
 /**
  * Crop geometry. Pure arithmetic: no canvas, no platform data, no store access.
  *
- * Two kinds of rectangle appear here. A `Rect` (src/types.ts) is in fractions (0..1) of the
- * source photo, which is how a card stores its crop. A `PixelRect` is in whole source pixels,
- * which is what the image worker draws from.
+ * Two kinds of rectangle appear here. A `Rect` (src/types.ts) is in fractions of the source
+ * photo, which is how a card stores its crop. A `PixelRect` is in whole source pixels, which is
+ * what the image worker draws from.
  *
  * A "ratio" is always width divided by height.
+ *
+ * Crop limits (SPEC.md, "Crop limits"). A crop may be larger than the photo, and the space
+ * outside the photo is then padding. Each axis is treated separately. On an axis where the crop
+ * is no longer than the photo, it stays inside the photo. On an axis where it is longer, it
+ * contains the photo and stays inside the fit frame: the smallest crop of the target ratio that
+ * contains the whole photo, centred on the photo. A crop is never larger than that.
  */
 
 import type { Rect, Size } from '../../types';
 
 export type Point = { x: number; y: number };
 
-/** A rectangle in whole pixels of the source photo. */
+/**
+ * A rectangle in whole pixels of the source photo. A crop with padding starts before 0 or ends
+ * past the photo's size on the padded axis.
+ */
 export type PixelRect = { x: number; y: number; width: number; height: number };
+
+/**
+ * How much longer than the photo a crop must be, as a fraction of the photo, before that axis
+ * counts as padded. Anything less is rounding, and the crop is treated as inside the photo.
+ */
+export const PADDING_TOLERANCE = 1e-9;
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -25,6 +40,52 @@ function largestFit(boxWidth: number, boxHeight: number, ratio: number): Size {
   return boxWidth / boxHeight > ratio
     ? { width: boxHeight * ratio, height: boxHeight }
     : { width: boxWidth, height: boxWidth / ratio };
+}
+
+/**
+ * The fit size: the smallest width and height of the given ratio that contain the whole photo,
+ * in fractions of the photo. One of the two is 1 and the other is 1 or more.
+ */
+export function fitSize(source: Size, ratio: number): Size {
+  return source.width / source.height > ratio
+    ? { width: 1, height: source.width / ratio / source.height }
+    : { width: (source.height * ratio) / source.width, height: 1 };
+}
+
+/** A size centred on the photo's centre. The fit size placed this way is the fit frame. */
+export function centredOnPhoto(size: Size): Rect {
+  return {
+    x: (1 - size.width) / 2,
+    y: (1 - size.height) / 2,
+    width: size.width,
+    height: size.height,
+  };
+}
+
+/**
+ * Where a crop may start on one axis, in fractions of the photo. `length` is the crop's length
+ * on that axis and `fitLength` the fit size's. A crop no longer than the photo stays inside the
+ * photo. A longer one contains the photo and stays inside the fit frame, so at the full fit
+ * length there is one place for it: centred.
+ */
+export function startRange(length: number, fitLength: number): { min: number; max: number } {
+  if (length <= 1 + PADDING_TOLERANCE) return { min: 0, max: 1 - length };
+  return {
+    min: Math.max(1 - length, (1 - fitLength) / 2),
+    max: Math.min(0, (1 + fitLength) / 2 - length),
+  };
+}
+
+/** A crop slid, without changing its size, to where the crop limits allow it on each axis. */
+export function slideIntoLimits(crop: Rect, fit: Size): Rect {
+  const across = startRange(crop.width, fit.width);
+  const down = startRange(crop.height, fit.height);
+  return {
+    x: clamp(crop.x, across.min, across.max),
+    y: clamp(crop.y, down.min, down.max),
+    width: crop.width,
+    height: crop.height,
+  };
 }
 
 /**
@@ -46,12 +107,47 @@ export function focalCrop(source: Size, ratio: number, focal: Point): Rect {
 }
 
 /**
- * Makes a stored crop safe to render at the target ratio. The crop is first trimmed to the
- * photo, then, if its shape differs from the target, shrunk to the largest rectangle of the
- * target ratio centred inside it. A picture is never stretched to fit. A crop with no area left
- * is replaced by the largest centred crop of the photo.
+ * Makes a stored crop safe to render at the target ratio. A picture is never stretched to fit.
+ *
+ * A crop no longer than the photo on either axis is handled exactly as it always was: trimmed
+ * to the photo, then, if its shape differs from the target, shrunk to the largest rectangle of
+ * the target ratio centred inside it. A crop with no area left is replaced by the largest
+ * centred crop of the photo.
+ *
+ * A crop longer than the photo on an axis has padding. It is shrunk to the target ratio about
+ * its centre, then to the fit size if it is larger than that, and then slid to where the crop
+ * limits allow (`slideIntoLimits`).
  */
 export function fitCropToRatio(crop: Rect, source: Size, ratio: number): Rect {
+  const padded =
+    Number.isFinite(crop.x) &&
+    Number.isFinite(crop.y) &&
+    Number.isFinite(crop.width) &&
+    Number.isFinite(crop.height) &&
+    crop.width > 0 &&
+    crop.height > 0 &&
+    (crop.width > 1 + PADDING_TOLERANCE || crop.height > 1 + PADDING_TOLERANCE);
+  return padded ? fitPaddedCrop(crop, source, ratio) : fitCropInsidePhoto(crop, source, ratio);
+}
+
+function fitPaddedCrop(crop: Rect, source: Size, ratio: number): Rect {
+  const limit = fitSize(source, ratio);
+  const shaped = largestFit(crop.width * source.width, crop.height * source.height, ratio);
+  const width = Math.min(shaped.width / source.width, limit.width);
+  const height = Math.min(shaped.height / source.height, limit.height);
+  return slideIntoLimits(
+    {
+      x: crop.x + crop.width / 2 - width / 2,
+      y: crop.y + crop.height / 2 - height / 2,
+      width,
+      height,
+    },
+    limit,
+  );
+}
+
+/** The crop fitting used before crops could have padding, kept exactly as it was. */
+function fitCropInsidePhoto(crop: Rect, source: Size, ratio: number): Rect {
   const left = fraction(crop.x);
   const top = fraction(crop.y);
   const right = fraction(crop.x + crop.width);
@@ -71,13 +167,22 @@ export function fitCropToRatio(crop: Rect, source: Size, ratio: number): Rect {
   };
 }
 
-/** A fractional crop as whole source pixels, at least 1 x 1 and always inside the photo. */
+/** A whole number of pixels; never negative zero. */
+const whole = (value: number) => Math.round(value) + 0;
+
+/**
+ * A fractional crop as whole source pixels, at least 1 x 1. The crop limits are kept in pixels
+ * too: on an axis where the crop is no longer than the photo it is inside the photo, and on an
+ * axis where it is longer it contains the photo.
+ */
 export function cropToPixels(crop: Rect, source: Size): PixelRect {
-  const width = clamp(Math.round(crop.width * source.width), 1, source.width);
-  const height = clamp(Math.round(crop.height * source.height), 1, source.height);
+  const width = Math.max(1, whole(crop.width * source.width));
+  const height = Math.max(1, whole(crop.height * source.height));
+  const roomAcross = source.width - width;
+  const roomDown = source.height - height;
   return {
-    x: clamp(Math.round(crop.x * source.width), 0, source.width - width),
-    y: clamp(Math.round(crop.y * source.height), 0, source.height - height),
+    x: clamp(whole(crop.x * source.width), Math.min(0, roomAcross), Math.max(0, roomAcross)),
+    y: clamp(whole(crop.y * source.height), Math.min(0, roomDown), Math.max(0, roomDown)),
     width,
     height,
   };
@@ -86,7 +191,8 @@ export function cropToPixels(crop: Rect, source: Size): PixelRect {
 /**
  * Where the photo's focal point lands in the cropped output, as fractions (0..1) of the output
  * frame. This is the form the validator's safe-zone rule takes. A focal point outside the crop
- * is reported at the nearest edge.
+ * is reported at the nearest edge. With padding the frame is larger than the photo, and the
+ * point is still measured from the crop's own corner.
  */
 export function focalInFrame(focal: Point, crop: Rect): Point {
   return {

@@ -166,7 +166,7 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
     if (!move && resize === null) return;
     event.preventDefault();
     const next = move
-      ? moveCrop(shown, move.dx, move.dy)
+      ? moveCrop(shown, move.dx, move.dy, limits)
       : scaleCrop(shown, resize as number, limits);
     // At the edge of the photo or at a size limit nothing changes, so nothing is written.
     if (next.x !== shown.x || next.y !== shown.y || next.width !== shown.width) write(next);
