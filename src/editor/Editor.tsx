@@ -19,12 +19,14 @@
  * Each of those is one undo step and marks the session as changed, so autosave picks it up. The
  * board then renders and checks the card again.
  *
- * Undo. While the editor is open, Ctrl/Cmd-Z belongs to it: it undoes only the changes made
- * here since it opened, one per press, and does nothing once those are used up. The key press
- * is always stopped here, so the app-wide undo in SessionPanel never also runs.
+ * Undo. While the editor is open, Ctrl/Cmd-Z belongs to it: it undoes only the changes made in
+ * the card dialog since it opened (src/board/dialogUndo.ts), one per press, and does nothing once
+ * those are used up. That includes a press while a checkbox, radio button or slider has focus;
+ * only a text field keeps Ctrl/Cmd-Z for its own typing. The key press is always stopped here,
+ * so the app-wide undo in SessionPanel never also runs.
  */
 
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { isImageEdit } from '../lib/board/renderValidation';
 import {
@@ -42,9 +44,12 @@ import type { Point } from '../lib/editor/geometry';
 import { ownFocalMove, recentredCrops } from '../lib/editor/focal';
 import { getPlacement } from '../lib/platforms';
 import { effectiveFocal } from '../lib/render/focal';
-import { UNDO_LIMIT, useSessionStore } from '../store/sessionStore';
+import { useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, ImageEdit, Rect, Size } from '../types';
+import { isTyping, isUndoKey } from '../app/keys';
 import { buttonClass } from '../app/styles';
+import { createDialogUndo } from '../board/dialogUndo';
+import type { DialogUndo } from '../board/dialogUndo';
 import { CropStage } from './CropStage';
 import { cropReadout, focalKindText, focalLabel, focalReadout, stageLabel } from './text';
 import type { FocalKind } from './text';
@@ -61,6 +66,8 @@ export type EditorProps = {
   blob: Blob | undefined;
   /** Opens the photo. Tests pass a fake. */
   loadPhoto?: PhotoLoader;
+  /** The card dialog's undo, shared with the rest of the dialog; the editor's own without one. */
+  undo?: DialogUndo;
 };
 
 export const LOADING_TEXT = 'Opening the photo so you can adjust the crop…';
@@ -73,16 +80,7 @@ export const HELP_TEXT =
 /** A card's output size, from src/data/platforms.json; undefined for an unknown placement. */
 const targetOf = (card: Card) => getPlacement(card.platform, card.placement)?.sizes[0];
 
-/** True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead. */
-function isTyping(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLInputElement ||
-    target instanceof HTMLTextAreaElement ||
-    (target instanceof HTMLElement && target.isContentEditable)
-  );
-}
-
-export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
+export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorProps) {
   const state = useSourcePhoto(
     {
       assetId: asset.id,
@@ -95,8 +93,8 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
   );
   const readoutId = useId();
   const focalReadoutId = useId();
-  /** How many of the newest undo steps were made here since the editor opened. */
-  const steps = useRef(0);
+  const [ownUndo] = useState(createDialogUndo);
+  const dialogUndo = undo ?? ownUndo;
 
   const source = { width: asset.width, height: asset.height };
   const limits = cropLimits(source, target);
@@ -110,46 +108,43 @@ export function Editor({ card, asset, target, blob, loadPhoto }: EditorProps) {
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
-      const isUndo =
-        (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z';
-      if (!isUndo || isTyping(event.target)) return;
+      if (!isUndoKey(event) || isTyping(event.target)) return;
       event.preventDefault();
       event.stopImmediatePropagation();
-      if (steps.current === 0) return;
-      steps.current -= 1;
-      useSessionStore.getState().undo();
+      dialogUndo.undo();
     }
     // Capture phase on the window: it runs before any other Ctrl/Cmd-Z listener can.
     window.addEventListener('keydown', onKeyDown, true);
     return () => window.removeEventListener('keydown', onKeyDown, true);
-  }, []);
+  }, [dialogUndo]);
 
   /** Writes a new crop to the card: one store change, one undo step. */
   function write(crop: Rect) {
-    const changed = useSessionStore.getState().updateCard(card.id, (draft) => {
-      if (isImageEdit(draft.edit)) draft.edit.crop = crop;
+    dialogUndo.record(() => {
+      useSessionStore.getState().updateCard(card.id, (draft) => {
+        if (isImageEdit(draft.edit)) draft.edit.crop = crop;
+      });
     });
-    if (changed) steps.current = Math.min(steps.current + 1, UNDO_LIMIT);
   }
 
   /** Moves the focal point: one store change and one undo step, or nothing if it is the same. */
   function writeFocal(next: Point) {
     const store = useSessionStore.getState();
-    const before = store.revision;
     if (own) {
       // The card's own point: this card only, never the photo or its other cards.
       const move = ownFocalMove({ focal: own, edit: card.edit }, source, target, next);
       if (!move) return;
-      store.updateCard(card.id, (draft) => {
-        draft.focal = move.focal;
-        if (move.crop && isImageEdit(draft.edit)) draft.edit.crop = move.crop;
+      dialogUndo.record(() => {
+        store.updateCard(card.id, (draft) => {
+          draft.focal = move.focal;
+          if (move.crop && isImageEdit(draft.edit)) draft.edit.crop = move.crop;
+        });
       });
     } else {
       const crops = recentredCrops(store.session?.cards ?? [], asset, next, targetOf);
-      store.setAssetFocal(asset.id, next, crops);
-    }
-    if (useSessionStore.getState().revision !== before) {
-      steps.current = Math.min(steps.current + 1, UNDO_LIMIT);
+      dialogUndo.record(() => {
+        store.setAssetFocal(asset.id, next, crops);
+      });
     }
   }
 

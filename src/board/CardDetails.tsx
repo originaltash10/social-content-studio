@@ -25,6 +25,7 @@ import {
 import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
+import type { DialogUndo } from './dialogUndo';
 import { ResultBadge } from './ResultBadge';
 
 export type CardDetailsProps = {
@@ -36,7 +37,12 @@ export type CardDetailsProps = {
   headingId: string;
   /** The editor for this card. Without one, the rendered preview is shown instead. */
   editor?: ReactNode;
+  /** The dialog's undo; each change made here is recorded as one of the dialog's steps. */
+  undo?: DialogUndo;
 };
+
+/** Without a dialog undo, a change is simply made. */
+const runChange = (change: () => void) => change();
 
 export const OVERRIDE_LABEL = 'Export this card even though it fails its checks';
 export const OVERRIDE_NOT_NEEDED =
@@ -53,7 +59,9 @@ export function CardDetails({
   version,
   headingId,
   editor,
+  undo,
 }: CardDetailsProps) {
+  const record = undo?.record ?? runChange;
   const done = render?.kind === 'done' ? render : null;
   const issues = card.validation.issues;
   return (
@@ -121,9 +129,11 @@ export function CardDetails({
                   checked={card.overrideFail}
                   onChange={(event) => {
                     const checked = event.target.checked;
-                    // One change, so one undo step.
-                    useSessionStore.getState().updateCard(card.id, (draft) => {
-                      draft.overrideFail = checked;
+                    // One change, so one undo step, which the dialog's Ctrl/Cmd-Z can reverse.
+                    record(() => {
+                      useSessionStore.getState().updateCard(card.id, (draft) => {
+                        draft.overrideFail = checked;
+                      });
                     });
                   }}
                 />

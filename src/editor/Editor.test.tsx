@@ -568,6 +568,39 @@ describe('undo in the editor', () => {
     expect(store().undoStack).toHaveLength(steps);
   });
 
+  it('with focus on a radio button, a slider or a checkbox, undoes exactly one step per press', async () => {
+    const outside = vi.fn();
+    const hear = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') outside();
+    };
+    window.addEventListener('keydown', hear);
+    await openEditor(
+      <>
+        <SessionPanel />
+        <input type="radio" aria-label="A radio button" />
+        <input type="range" aria-label="A slider" />
+        <input type="checkbox" aria-label="A checkbox" />
+        <Host />
+      </>,
+    );
+    for (let press = 0; press < 3; press += 1) fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    const steps = store().undoStack.length;
+    const targets = ['A radio button', 'A slider', 'A checkbox'].map((name) =>
+      screen.getByLabelText(name),
+    );
+    targets.forEach((target, index) => {
+      expect(undoKey(target).defaultPrevented).toBe(true);
+      expect(store().undoStack).toHaveLength(steps - index - 1);
+    });
+    expectCrop(crop(), AUTO);
+    // Used up: the card made before the editor opened stays.
+    for (const target of targets) undoKey(target);
+    expect(store().undoStack).toHaveLength(steps - 3);
+    expect(store().session?.cards).toHaveLength(1);
+    expect(outside).not.toHaveBeenCalled();
+    window.removeEventListener('keydown', hear);
+  });
+
   it('counts a drag and a reset as one step each', async () => {
     await openEditor();
     fireEvent.pointerDown(rect(), pointer(at(0.5, 0.5)));

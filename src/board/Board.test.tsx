@@ -17,6 +17,7 @@ import type { PlacementSpec } from '../types';
 import { LOADING_TEXT } from '../editor/Editor';
 import { SourcePhotoError } from '../lib/editor/sourcePhoto';
 import type { DisplayPhoto, SourcePhotoInput } from '../lib/editor/sourcePhoto';
+import { SessionPanel } from '../app/SessionPanel';
 import { Board, NO_CARDS_TEXT, NO_MATCH_TEXT, NO_PHOTOS_TEXT, NO_SESSION_TEXT } from './Board';
 
 // ---------------------------------------------------------------------------
@@ -794,6 +795,116 @@ describe('the details dialog', () => {
     });
     expect(dialog.open).toBe(false);
     expect(screen.getByRole('heading', { name: 'Board' })).toHaveFocus();
+  });
+});
+
+describe('undo in the dialog', () => {
+  const OVERRIDE = /^Export this card even though it fails its checks/;
+
+  /** Sends Ctrl/Cmd-Z to `target` and returns the event. */
+  function undoKey(target: Element) {
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  /** Opens the dialog of a card that fails its checks, with the app-wide undo also listening. */
+  async function openFailing() {
+    openSession(PHOTO);
+    render(
+      <>
+        <SessionPanel />
+        <Board createClient={createClient} onController={onController} loadPhoto={loadPhoto} />
+      </>,
+    );
+    createCards('Feed vertical');
+    await sent(1);
+    // Ten pixels narrow, so rule 1 fails and the override is offered.
+    answer(0, { width: sizeOf(FEED).width - 10 });
+    await idle();
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    await showPhoto();
+    // Stands for any other undo listener: it hears only the Ctrl/Cmd-Z presses that get past.
+    const outside = vi.fn();
+    const hear = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z') outside();
+    };
+    window.addEventListener('keydown', hear);
+    return { dialog, outside, stop: () => window.removeEventListener('keydown', hear) };
+  }
+
+  it('with focus on the override checkbox, one press undoes exactly one dialog change', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    const cardOf = () => store().session?.cards[0];
+    const cropBefore = cardOf()?.edit;
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    const checkbox = within(dialog).getByRole('checkbox', { name: OVERRIDE });
+    fireEvent.click(checkbox);
+    checkbox.focus();
+    const steps = store().undoStack.length;
+    expect(cardOf()?.overrideFail).toBe(true);
+
+    // The tick is undone, and only the tick.
+    const first = undoKey(checkbox);
+    expect(first.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 1);
+    expect(cardOf()?.overrideFail).toBe(false);
+    expect(cardOf()?.edit).not.toEqual(cropBefore);
+
+    // Then the crop move.
+    undoKey(checkbox);
+    expect(store().undoStack).toHaveLength(steps - 2);
+    expect(cardOf()?.edit).toEqual(cropBefore);
+
+    // Nothing left that the dialog did: the press is stopped and changes nothing, so the card
+    // made before the dialog opened is still there.
+    const spare = undoKey(checkbox);
+    expect(spare.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 2);
+    expect(store().session?.cards).toHaveLength(1);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('with no change made in the dialog, a press does nothing, wherever the focus is', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    const steps = store().undoStack.length;
+    const before = store().session;
+    for (const target of [
+      within(dialog).getByRole('checkbox', { name: OVERRIDE }),
+      within(dialog).getByRole('application'),
+      document.body,
+    ]) {
+      expect(undoKey(target).defaultPrevented).toBe(true);
+    }
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().session).toBe(before);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
+  });
+
+  it('starts again from nothing each time the dialog opens', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    fireEvent.click(within(dialog).getByRole('checkbox', { name: OVERRIDE }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    await showPhoto();
+    const reopened = screen.getByRole('dialog');
+    const steps = store().undoStack.length;
+    undoKey(within(reopened).getByRole('checkbox', { name: OVERRIDE }));
+    // The tick was made the last time the dialog was open, so it stays.
+    expect(store().undoStack).toHaveLength(steps);
+    expect(store().session?.cards[0]?.overrideFail).toBe(true);
+    expect(outside).not.toHaveBeenCalled();
+    stop();
   });
 });
 
