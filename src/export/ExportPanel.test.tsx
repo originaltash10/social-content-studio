@@ -320,6 +320,35 @@ describe('Download as .zip', () => {
     ).toBeInTheDocument();
   });
 
+  for (const [what, change] of [
+    ['file type', (edit: { format: string; quality: number }) => void (edit.format = 'png')],
+    ['quality', (edit: { format: string; quality: number }) => void (edit.quality = 0.4)],
+  ] as const) {
+    it(`lists a card whose ${what} changed while its file was being made as changed`, async () => {
+      openSession(newCard());
+      const client = autoClient((job) => {
+        // The change arrives while the worker is making the file.
+        act(() => {
+          const id = store().session?.cards[0]?.id as string;
+          store().updateCard(id, (card) => {
+            if ('format' in card.edit) change(card.edit);
+          });
+        });
+        return encoded(job);
+      });
+      const { props } = renderPanel({ createClient: () => client });
+      fireEvent.click(button('Download as .zip'));
+      await settle();
+      const list = within(results()).getByRole('list', { name: 'Cards left out' });
+      expect(
+        within(list).getByText(
+          /^Instagram Feed vertical for site\.jpg, v1: This card changed while its file was being made/,
+        ),
+      ).toBeInTheDocument();
+      expect(props.download).not.toHaveBeenCalled();
+    });
+  }
+
   it('reports something unexpected in plain words', async () => {
     openSession(newCard());
     renderPanel({

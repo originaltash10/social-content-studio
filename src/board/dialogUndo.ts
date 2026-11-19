@@ -8,6 +8,9 @@
  * own entries rather than a number, so an entry that falls off the end of the 50-step list (see
  * UNDO_LIMIT in the session store) stops being counted, and an undo only ever reverts the
  * newest entry when that entry is the dialog's.
+ *
+ * A control that holds a value not yet written (the quality slider, while a key is held) registers
+ * a flush with `beforeUndo`, so Ctrl/Cmd-Z first writes that value as one step and then undoes it.
  */
 
 import { useSessionStore } from '../store/sessionStore';
@@ -19,12 +22,19 @@ export type DialogUndo = {
   record: (change: () => void) => void;
   /** How many of the dialog's steps are still in the shared undo list. */
   count: () => number;
-  /** Undoes the newest step if it is the dialog's. Returns whether a step was undone. */
+  /**
+   * Runs every registered flush first (the quality slider commits a value still being changed,
+   * as its own step), then undoes the newest step if it is the dialog's. Returns whether a step
+   * was undone.
+   */
   undo: () => boolean;
+  /** Registers a flush to run before each undo. Returns a function that removes it. */
+  beforeUndo: (flush: () => void) => () => void;
 };
 
 export function createDialogUndo(): DialogUndo {
   const own = new Set<UndoEntry>();
+  const flushes = new Set<() => void>();
   const stack = () => useSessionStore.getState().undoStack;
 
   /** Forgets entries that are no longer in the shared list. */
@@ -46,11 +56,18 @@ export function createDialogUndo(): DialogUndo {
       return own.size;
     },
     undo: () => {
+      for (const flush of [...flushes]) flush();
       const top = stack().at(-1);
       if (top === undefined || !own.has(top)) return false;
       own.delete(top);
       useSessionStore.getState().undo();
       return true;
+    },
+    beforeUndo: (flush) => {
+      flushes.add(flush);
+      return () => {
+        flushes.delete(flush);
+      };
     },
   };
 }

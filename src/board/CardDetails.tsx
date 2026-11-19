@@ -6,6 +6,10 @@
  * A card whose latest result is Fail also shows the export override (SPEC.md: "Fail blocks
  * export unless overridden"). It stays visible while the override is ticked, so it can always be
  * unticked, even after the card stops failing.
+ *
+ * A card the editor can open also shows its file type (JPG or PNG) and JPG quality. A card
+ * without the editor (its photo is not in the session, or it is not a single-photo card) cannot
+ * be made into a file, so it has no file settings to change either.
  */
 
 import type { ReactNode } from 'react';
@@ -22,10 +26,12 @@ import {
   resultOf,
   upscaledNote,
 } from '../lib/board/view';
+import { isImageEdit } from '../lib/board/renderValidation';
 import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
 import type { DialogUndo } from './dialogUndo';
+import { FileTypeControls } from './FileTypeControls';
 import { ResultBadge } from './ResultBadge';
 
 export type CardDetailsProps = {
@@ -119,6 +125,10 @@ export function CardDetails({
               </ul>
             )}
           </section>
+
+          {editor !== undefined && isImageEdit(card.edit) && (
+            <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
+          )}
 
           {(card.validation.level === 'fail' || card.overrideFail) && (
             <section aria-label="Export override" className="flex flex-col gap-1">

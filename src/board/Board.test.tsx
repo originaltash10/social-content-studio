@@ -509,6 +509,29 @@ describe('duplicate and versions', () => {
     await sent(3);
     expect(client.cancelled).toEqual([]);
   });
+
+  it('copies the file type and quality, and starts the copy with the override off', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    const id = store().session?.cards[0]?.id as string;
+    act(() => {
+      store().updateCard(id, (card) => {
+        if ('format' in card.edit) {
+          card.edit.format = 'png';
+          card.edit.quality = 0.55;
+        }
+        card.overrideFail = true;
+      });
+    });
+    fireEvent.click(button('Duplicate Instagram Feed vertical for site.jpg, v1'));
+    const copy = store().session?.cards[1];
+    expect(copy?.edit).toMatchObject({ format: 'png', quality: 0.55 });
+    expect(copy?.overrideFail).toBe(false);
+    // The copy is made as PNG too.
+    await sent(2);
+    expect(client.calls.map((call) => call.job.plan.format)).toEqual(['png', 'png']);
+  });
 });
 
 describe('the details dialog', () => {
@@ -710,6 +733,9 @@ describe('the details dialog', () => {
       const dialog = screen.getByRole('dialog') as HTMLDialogElement;
       expect(dialog).toHaveTextContent('No preview yet.');
       expect(within(dialog).queryByRole('status')).toBeNull();
+      // No file can be made for it, so it has no file type or quality to change.
+      expect(within(dialog).queryByRole('group', { name: 'File type' })).toBeNull();
+      expect(within(dialog).queryByRole('slider')).toBeNull();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
     }
     expect(photoLoads).toHaveLength(0);
@@ -786,6 +812,73 @@ describe('the details dialog', () => {
     expect(store().undoStack).toHaveLength(before.undoSteps);
     expect(store().revision).toBe(before.revision);
     expect(store().dirty).toBe(false);
+  });
+
+  it('renders the card again as PNG when PNG is chosen, and as JPG at the new quality', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const fileRow = () => within(dialog).getByText(/^\d+ × \d+ (JPG|PNG) · /);
+    const { width, height } = sizeOf(FEED);
+    expect(fileRow()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+    expect(store().dirty).toBe(true);
+    act(() => store().markSaved(store().revision));
+
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'PNG' }));
+    // The card is changed (so autosave picks it up) and a new file is asked for, as PNG.
+    expect(store().dirty).toBe(true);
+    await sent(2);
+    expect(client.calls[1]?.job.plan).toMatchObject({ format: 'png', target: { width, height } });
+    expect(article(/v1/)).toHaveTextContent('Not checked yet');
+    answer(1, {
+      blob: new Blob(['png'], { type: 'image/png' }),
+      mimeType: 'image/png',
+      format: 'png',
+      bytes: 1_200_000,
+    });
+    await idle();
+    expect(fileRow()).toHaveTextContent(`${width} × ${height} PNG · 1.2 MB`);
+    expect(within(dialog).getByRole('region', { name: 'Rendered file' })).toContainElement(
+      within(dialog).getAllByRole('img').at(-1) as HTMLElement,
+    );
+    expect(article(/v1/)).toHaveTextContent('Warning');
+
+    // Back to JPG, then the quality: each is a new file at the placement's size.
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'JPG' }));
+    await sent(3);
+    expect(client.calls[2]?.job.plan).toMatchObject({ format: 'jpg', quality: 0.9 });
+    answer(2);
+    await idle();
+    const slider = within(dialog).getByRole('slider', { name: 'Quality' });
+    fireEvent.keyDown(slider, { key: 'PageDown' });
+    fireEvent.keyUp(slider, { key: 'PageDown' });
+    await sent(4);
+    expect(client.calls[3]?.job.plan).toMatchObject({
+      format: 'jpg',
+      quality: 0.8,
+      target: { width, height },
+    });
+  });
+
+  it('undoes exactly a file type change with one Ctrl/Cmd-Z while its radio has focus', async () => {
+    const { dialog } = await openDetails();
+    await showPhoto();
+    const png = within(dialog).getByRole('radio', { name: 'PNG' });
+    fireEvent.click(png);
+    png.focus();
+    const steps = store().undoStack.length;
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      png.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+    expect(store().undoStack).toHaveLength(steps - 1);
+    expect(store().session?.cards[0]?.edit).toMatchObject({ format: 'jpg', quality: 0.9 });
+    expect(within(dialog).getByRole('radio', { name: 'JPG' })).toBeChecked();
   });
 
   it('closes when undo removes its card, and moves focus to the board heading', async () => {
