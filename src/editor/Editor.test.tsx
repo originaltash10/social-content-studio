@@ -212,7 +212,7 @@ describe('the crop area', () => {
     expect(stage()).toHaveAttribute('tabindex', '0');
     expect(stage()).toHaveAccessibleName(stageLabel('site.jpg'));
     expect(stageLabel('site.jpg')).toBe(
-      'Crop of site.jpg. Arrow keys move the crop. Plus and minus resize it. Hold Shift for bigger steps.',
+      'Crop of site.jpg. Arrow keys move the crop. Equals makes it bigger and minus makes it smaller. Hold Shift for steps ten times as big.',
     );
     expect(stage().className).toContain('focus-visible:outline-accent');
     expect(stage()).toHaveAccessibleDescription(cropReadout(AUTO));
@@ -687,7 +687,7 @@ describe('the focal point', () => {
     expect(marker().tagName).toBe('BUTTON');
     expect(marker()).not.toHaveAttribute('tabindex', '-1');
     expect(marker()).toHaveAccessibleName(
-      "Focal point of site.jpg, shared with this photo's other cards. Arrow keys move it. Hold Shift for bigger steps.",
+      "Focal point of site.jpg, shared with this photo's other cards. Arrow keys move it. Hold Shift for steps ten times as big.",
     );
     expect(focalLabel('site.jpg', 'shared')).toBe(marker().getAttribute('aria-label'));
     // The same in plain words, in view near the marker's readout.
@@ -945,7 +945,7 @@ describe('a card with its own focal point', () => {
   it('says in the label and in view that the point is its own', async () => {
     await openEditor(<Host index={1} />);
     expect(marker()).toHaveAccessibleName(
-      "This card's own focal point on site.jpg. Moving it changes only this card. Arrow keys move it. Hold Shift for bigger steps.",
+      "This card's own focal point on site.jpg. Moving it changes only this card. Arrow keys move it. Hold Shift for steps ten times as big.",
     );
     expect(focalLabel('site.jpg', 'own')).toBe(marker().getAttribute('aria-label'));
     expect(screen.getByTestId('focal-kind')).toHaveTextContent(
@@ -1124,5 +1124,138 @@ describe('a card with its own focal point', () => {
     expectCrop(cardAt(0).edit.crop, AUTO);
     expect(duplicate()).toBe(duplicateBefore);
     expect(store().undoStack).toHaveLength(before.undo);
+  });
+});
+
+describe('focus', () => {
+  const marker = () => screen.getByTestId('focal-marker');
+  /** A press with the keys' own defaults observable: returns whether it was prevented. */
+  const key = (target: Element, init: KeyboardEventInit) => {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event.defaultPrevented;
+  };
+
+  it('goes to the crop area when the crop is pressed, without scrolling', async () => {
+    await openEditor();
+    const focus = vi.spyOn(stage(), 'focus');
+    expect(stage()).not.toHaveFocus();
+    fireEvent.pointerDown(rect(), pointer(at(0.4, 0.4)));
+    expect(stage()).toHaveFocus();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    fireEvent.pointerUp(rect(), pointer(at(0.4, 0.4)));
+    expect(stage()).toHaveFocus();
+  });
+
+  it.each(['nw', 'ne', 'sw', 'se'] as const)(
+    'goes to the crop area when the %s corner is pressed',
+    async (corner) => {
+      await openEditor();
+      const focus = vi.spyOn(stage(), 'focus');
+      fireEvent.pointerDown(handle(corner), pointer(at(0.5, 0.5)));
+      expect(stage()).toHaveFocus();
+      expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    },
+  );
+
+  it('goes to the marker when the marker is pressed, without scrolling', async () => {
+    await openEditor();
+    const focus = vi.spyOn(marker(), 'focus');
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    expect(marker()).toHaveFocus();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('moves from the marker to the crop area when the crop is pressed next', async () => {
+    await openEditor();
+    fireEvent.pointerDown(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerUp(marker(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerDown(rect(), pointer(at(0.4, 0.4)));
+    expect(stage()).toHaveFocus();
+  });
+
+  it('does not move for a press that starts no drag', async () => {
+    await openEditor();
+    fireEvent.pointerDown(rect(), pointer({ ...at(0.4, 0.4), button: 2 }));
+    fireEvent.pointerDown(rect(), pointer({ ...at(0.4, 0.4), isPrimary: false }));
+    fireEvent.pointerDown(handle('se'), pointer({ ...at(0.8, 1), button: 1 }));
+    fireEvent.pointerDown(marker(), pointer({ ...at(0.5, 0.5), button: 2 }));
+    expect(stage()).not.toHaveFocus();
+    expect(marker()).not.toHaveFocus();
+  });
+
+  it('still stops the press itself, so a drag selects no text', async () => {
+    await openEditor();
+    expect(fireEvent.pointerDown(rect(), pointer(at(0.4, 0.4)))).toBe(false);
+  });
+
+  it('lets the keys work straight after a press on the crop', async () => {
+    await openEditor();
+    fireEvent.pointerDown(rect(), pointer(at(0.4, 0.4)));
+    fireEvent.pointerUp(rect(), pointer(at(0.4, 0.4)));
+    fireEvent.keyDown(document.activeElement as Element, { key: 'ArrowRight' });
+    expectCrop(crop(), { ...AUTO, x: 0.21 });
+  });
+
+  it('can be reached with Tab: the crop area and the marker are both in the Tab order', async () => {
+    await openEditor();
+    expect(stage().tabIndex).toBe(0);
+    expect(marker().tabIndex).toBe(0);
+    // The crop area comes first in the document, so Tab reaches it before the marker.
+    expect(
+      stage().compareDocumentPosition(marker()) & Node.DOCUMENT_POSITION_CONTAINED_BY,
+    ).toBeTruthy();
+  });
+
+  it.each([
+    // [key, Shift, change in the crop's width in hundredths of the photo]
+    ['=', false, 1],
+    ['+', true, 10],
+    ['+', false, 1],
+    ['Add', false, 1],
+    ['Add', true, 10],
+    ['-', false, -1],
+    ['_', true, -10],
+    ['-', true, -10],
+    ['Subtract', false, -1],
+    ['Subtract', true, -10],
+  ])('resizes with %s (Shift: %s) by %i hundredths', async (name, shiftKey, hundredths) => {
+    await openEditor();
+    // Start in the middle of the range, so there is room both ways.
+    for (let press = 0; press < 2; press++) key(stage(), { key: '_', shiftKey: true });
+    expect(crop().width).toBeCloseTo(0.4, 10);
+    expect(key(stage(), { key: name, shiftKey })).toBe(true);
+    expect(crop().width).toBeCloseTo(0.4 + hundredths / 100, 10);
+  });
+
+  it.each(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', '=', '+', '-', '_'])(
+    'stops the page from acting on %s in the crop area, with and without Shift',
+    async (name) => {
+      await openEditor();
+      expect(key(stage(), { key: name })).toBe(true);
+      expect(key(stage(), { key: name, shiftKey: true })).toBe(true);
+    },
+  );
+
+  it.each(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'])(
+    'stops the page from acting on %s on the marker, with and without Shift',
+    async (name) => {
+      await openEditor();
+      expect(key(marker(), { key: name })).toBe(true);
+      expect(key(marker(), { key: name, shiftKey: true })).toBe(true);
+    },
+  );
+
+  it('leaves every other key to the browser', async () => {
+    await openEditor();
+    for (const name of ['Tab', 'Escape', 'Enter', ' ', 'PageDown', 'a']) {
+      expect(key(stage(), { key: name })).toBe(false);
+      expect(key(marker(), { key: name })).toBe(false);
+    }
+    // Plus and minus are the crop's keys, not the marker's.
+    expect(key(marker(), { key: '=' })).toBe(false);
+    expect(key(marker(), { key: '-' })).toBe(false);
   });
 });

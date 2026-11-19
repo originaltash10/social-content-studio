@@ -559,6 +559,23 @@ describe('the details dialog', () => {
     expect(within(checks).getAllByRole('listitem')[0]).toHaveTextContent(/^Warning:/);
   });
 
+  it('puts focus on its heading when it opens, so Tab starts at the top of the dialog', async () => {
+    const { dialog } = await openDetails();
+    const heading = within(dialog).getByRole('heading', { level: 2 });
+    expect(heading).toHaveFocus();
+    expect(heading.tabIndex).toBe(-1);
+    // Focus stays there when the photo opens and the editor appears.
+    await showPhoto();
+    expect(heading).toHaveFocus();
+    // The crop area and the marker come next in the document, before every other control.
+    const controls = [
+      ...dialog.querySelectorAll<HTMLElement>('[tabindex="0"], button, input'),
+    ].filter((element) => !(element as HTMLButtonElement).disabled);
+    expect(controls[0]).toBe(within(dialog).getByRole('application'));
+    expect(controls[1]).toBe(within(dialog).getByTestId('focal-marker'));
+    expect(controls.at(-1)).toBe(within(dialog).getByRole('button', { name: 'Close' }));
+  });
+
   it('closes with Esc and returns focus to the Open button', async () => {
     const { opener, dialog } = await openDetails();
     pressEscape(dialog);
@@ -900,6 +917,110 @@ describe('the details dialog', () => {
     });
     expect(dialog.open).toBe(false);
     expect(screen.getByRole('heading', { name: 'Board' })).toHaveFocus();
+  });
+});
+
+describe('the page behind the dialog', () => {
+  const root = document.documentElement;
+  let scrollTo: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    scrollTo = vi.fn();
+    vi.spyOn(window, 'scrollTo').mockImplementation(scrollTo as () => void);
+    // The board is scrolled 640 pixels down when the dialog opens.
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(640);
+  });
+  afterEach(() => {
+    root.removeAttribute('style');
+  });
+
+  async function openDetails() {
+    openSession(PHOTO);
+    const view = renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    const opener = button('Open Instagram Feed vertical for site.jpg, v1');
+    const focus = vi.spyOn(opener, 'focus');
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog', { name: 'Instagram Feed vertical' });
+    return { ...view, opener, focus, dialog: dialog as HTMLDialogElement };
+  }
+
+  /** The page scrolls again and is back where it was when the dialog opened. */
+  function expectReleased() {
+    expect(root.style.overflow).toBe('');
+    expect(scrollTo).toHaveBeenCalledTimes(1);
+    expect(scrollTo).toHaveBeenCalledWith(0, 640);
+  }
+
+  it('can scroll until the dialog opens, and not while it is open', async () => {
+    expect(root.style.overflow).toBe('');
+    await openDetails();
+    expect(root.style.overflow).toBe('hidden');
+    expect(scrollTo).not.toHaveBeenCalled();
+    // It stays locked while the dialog changes: the photo opens, the crop moves.
+    await showPhoto();
+    fireEvent.keyDown(screen.getByRole('application'), { key: 'ArrowRight' });
+    expect(root.style.overflow).toBe('hidden');
+    expect(scrollTo).not.toHaveBeenCalled();
+  });
+
+  it('is put back by Esc, with focus on the Open button and no scrolling to it', async () => {
+    const { opener, focus, dialog } = await openDetails();
+    pressEscape(dialog);
+    expectReleased();
+    expect(opener).toHaveFocus();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('is put back by the Close button, with focus on the Open button', async () => {
+    const { opener, focus, dialog } = await openDetails();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expectReleased();
+    expect(opener).toHaveFocus();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('is put back when undo removes the open card, with focus on the board heading', async () => {
+    const { dialog } = await openDetails();
+    const heading = screen.getByRole('heading', { name: 'Board' });
+    const focus = vi.spyOn(heading, 'focus');
+    act(() => {
+      store().undo();
+    });
+    expect(dialog.open).toBe(false);
+    expectReleased();
+    expect(heading).toHaveFocus();
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+  });
+
+  it('is put back when the session is cleared with the dialog open', async () => {
+    const { dialog } = await openDetails();
+    act(() => {
+      store().clearSession(() => true);
+    });
+    expect(dialog.open).toBe(false);
+    expectReleased();
+  });
+
+  it('is put back when the board goes away with the dialog open', async () => {
+    const { unmount } = await openDetails();
+    unmount();
+    expectReleased();
+  });
+
+  it('locks again each time the dialog opens, from where the page is then', async () => {
+    const { opener, dialog } = await openDetails();
+    pressEscape(dialog);
+    vi.spyOn(window, 'scrollY', 'get').mockReturnValue(200);
+    fireEvent.click(opener);
+    expect(root.style.overflow).toBe('hidden');
+    pressEscape(dialog);
+    expect(root.style.overflow).toBe('');
+    expect(scrollTo).toHaveBeenLastCalledWith(0, 200);
+    expect(scrollTo).toHaveBeenCalledTimes(2);
   });
 });
 

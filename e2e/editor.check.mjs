@@ -11,7 +11,9 @@
  * where they meet in a rendered file shows exactly which part of the photo was cropped.
  *
  * It checks: dragging the crop and resizing it from a corner (exact output size, and the
- * pixels move as expected); moving and resizing with the keyboard; Reset crop; a focal point
+ * pixels move as expected); moving and resizing with the keyboard, reached with Tab and after a
+ * mouse click, for the crop and for the focal point; that the board behind the dialog does not
+ * scroll and is where it was when the dialog closes; Reset crop; a focal point
  * move that re-centres a card on its automatic crop and leaves a hand-adjusted card alone; one
  * Ctrl-Z that reverses that move as a whole; a .scs download and reload that keeps the crops
  * and the focal point; that opening the editor requests no new script; and that every request
@@ -26,6 +28,13 @@
  * under the preview saying so, and one Ctrl-Z goes back to JPG; and a mouse drag, a touch drag
  * (real touch input, sent through the DevTools protocol) and a held arrow key on the quality
  * slider are each one undo step.
+ *
+ * How it reaches things. Every control is reached the way a person reaches it: with Tab, or
+ * with a real mouse click or drag. Keys are sent with page.keyboard, to whatever has focus. It
+ * never calls element.focus() and never dispatches an event straight at an element. The two
+ * exceptions, each with its reason where it is used: files are given to the file inputs with
+ * setInputFiles, because the system's file picker cannot be driven; and touch input is sent
+ * through the DevTools protocol, because Playwright's mouse cannot make a touch.
  *
  * Like e2e/board.check.mjs, it needs Playwright with Chromium already installed on the machine,
  * and is not part of `npm test` or the deploy workflow. Nothing it produces is written inside
@@ -296,6 +305,93 @@ async function drag(page, testId, dx, dy, from = { x: 0.5, y: 0.5 }) {
   await page.mouse.up();
 }
 
+/** A point in the crop that is clear of the focal point's marker and of the corner handles. */
+async function cropPoint(page) {
+  const crop = await page.getByTestId('crop-rect').boundingBox();
+  const marker = await page.getByTestId('focal-marker').boundingBox();
+  const centre = { x: marker.x + marker.width / 2, y: marker.y + marker.height / 2 };
+  for (const [fx, fy] of [
+    [0.25, 0.25],
+    [0.75, 0.25],
+    [0.25, 0.75],
+    [0.75, 0.75],
+  ]) {
+    const point = { x: crop.x + crop.width * fx, y: crop.y + crop.height * fy };
+    if (Math.hypot(point.x - centre.x, point.y - centre.y) > marker.width) return point;
+  }
+  throw new Error('no point in the crop is clear of the focal point marker');
+}
+/** A real mouse click inside the crop, away from the marker: press and release, no movement. */
+async function clickCrop(page) {
+  const point = await cropPoint(page);
+  await page.mouse.click(point.x, point.y);
+}
+
+/** Whether an element is the one with keyboard focus. */
+const hasFocus = (locator) => locator.evaluate((element) => element === document.activeElement);
+/** What has focus, in a few words, for the report. */
+const focusName = (page) =>
+  page.evaluate(() => {
+    const element = document.activeElement;
+    const name = element?.getAttribute('aria-label') ?? element?.textContent ?? '';
+    return `${element?.tagName.toLowerCase() ?? 'nothing'} "${name.trim().slice(0, 32)}"`;
+  });
+/** Presses Tab, as a person would, until the element has focus. Fails if it never does. */
+async function tabTo(page, locator, what, limit = 12) {
+  for (let presses = 1; presses <= limit; presses++) {
+    await page.keyboard.press('Tab');
+    if (await hasFocus(locator)) return presses;
+  }
+  throw new Error(
+    `Tab did not reach ${what} in ${limit} presses; focus is on ${await focusName(page)}`,
+  );
+}
+/**
+ * Whether the focused element shows the app's focus ring: it matches :focus-visible and has a
+ * solid outline in the accent colour, which is read from the theme, not written here.
+ */
+function ringShown(locator) {
+  return locator.evaluate((element) => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--color-accent)';
+    document.body.append(probe);
+    const accent = getComputedStyle(probe).color;
+    probe.remove();
+    const style = getComputedStyle(element);
+    return (
+      element.matches(':focus-visible') &&
+      style.outlineStyle === 'solid' &&
+      parseFloat(style.outlineWidth) >= 2 &&
+      style.outlineColor === accent
+    );
+  });
+}
+
+/** How far down the page (the board) is scrolled. */
+const pageY = (page) => page.evaluate(() => window.scrollY);
+/** Lets a scroll that was asked for happen, if it is going to. */
+const settle = (page) => page.waitForTimeout(150);
+/**
+ * Tries to scroll with whatever has focus: the arrow keys, Page Down, Space, and the mouse wheel
+ * over the dialog and over the backdrop beside it. Returns where the page was after each.
+ */
+async function tryToScroll(page) {
+  const seen = [];
+  for (const key of ['ArrowDown', 'ArrowUp', 'PageDown', 'Space']) {
+    await page.keyboard.press(key);
+    await settle(page);
+    seen.push(await pageY(page));
+  }
+  const dialog = await page.getByRole('dialog').boundingBox();
+  for (const x of [dialog.x + dialog.width / 2, dialog.x / 2]) {
+    await page.mouse.move(x, dialog.y + dialog.height / 2);
+    await page.mouse.wheel(0, 300);
+    await settle(page);
+    seen.push(await pageY(page));
+  }
+  return seen;
+}
+
 const renderProgress = (page) => page.getByRole('status', { name: 'Render progress' });
 async function waitForRendered(page, count) {
   await renderProgress(page)
@@ -314,7 +410,27 @@ async function closeEditor(page) {
 
 // --------------------------------------------------------------------------- the check
 
-async function runEditor(browser, name, url) {
+/** Starts a session with the test photo and the two cards, and waits for their files. */
+async function startSession(page, url) {
+  await page.goto(url, { waitUntil: 'load' });
+  await page.getByRole('button', { name: 'New session' }).click();
+  // The system's file picker cannot be driven, so the file is given to the input directly.
+  await page.getByLabel('Photos to import').setInputFiles({
+    name: PHOTO,
+    mimeType: 'image/jpeg',
+    buffer: await makePhoto(page),
+  });
+  await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+  await page.getByRole('button', { name: 'Create cards' }).click();
+  const form = page.getByRole('form', { name: 'Create cards' });
+  for (const placement of ['Feed vertical', 'Image post square']) {
+    await form.getByRole('checkbox', { name: new RegExp(`^${placement} \\(`) }).check();
+  }
+  await form.getByRole('button', { name: 'Create' }).click();
+  await waitForRendered(page, 2);
+}
+
+async function runEditor(browser, scrollbarBrowser, name, url) {
   console.log(`\n== Editor check: ${name} (${url})`);
   const context = await browser.newContext({
     acceptDownloads: true,
@@ -358,21 +474,7 @@ async function runEditor(browser, name, url) {
   }
 
   try {
-    await page.goto(url, { waitUntil: 'load' });
-    await page.getByRole('button', { name: 'New session' }).click();
-    await page.getByLabel('Photos to import').setInputFiles({
-      name: PHOTO,
-      mimeType: 'image/jpeg',
-      buffer: await makePhoto(page),
-    });
-    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
-    await page.getByRole('button', { name: 'Create cards' }).click();
-    const form = page.getByRole('form', { name: 'Create cards' });
-    for (const placement of ['Feed vertical', 'Image post square']) {
-      await form.getByRole('checkbox', { name: new RegExp(`^${placement} \\(`) }).check();
-    }
-    await form.getByRole('button', { name: 'Create' }).click();
-    await waitForRendered(page, 2);
+    await startSession(page, url);
 
     // 1. Opening the editor on a JPG asks for nothing new: no script, no chunk.
     const before = requests.length;
@@ -430,10 +532,44 @@ async function runEditor(browser, name, url) {
       `${cropText(resized.crop)}; shape ${shape.toFixed(3)}`,
     );
 
-    // 5. Keyboard: Tab reaches the crop area; arrows move it; minus and equals resize it.
-    await page.getByRole('application').focus();
-    await page.keyboard.press('Shift+ArrowLeft');
-    feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+    // 5. Keyboard. The dialog is closed and opened again, so everything below starts where a
+    //    person starts: the dialog has just opened, and nothing in it has been clicked. The
+    //    board is first scrolled away from its top with the mouse wheel, so that "the board did
+    //    not move" further down means something.
+    await closeEditor(page);
+    const stage = page.getByRole('application');
+    const marker = page.getByTestId('focal-marker');
+    const openFeed = page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true });
+    const jpgChoice = page.getByRole('dialog').getByRole('radio', { name: 'JPG' });
+    await page.mouse.move(640, 450);
+    await page.mouse.wheel(0, 120);
+    await settle(page);
+    const boardY = await pageY(page);
+    await openEditor(page, FEED_CARD);
+    const openedY = await pageY(page);
+    /** Presses a key that changes the feed card's crop, and waits for the card's new file. */
+    const cropKey = async (key) => {
+      await page.keyboard.press(key);
+      feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+    };
+
+    // 5a. Tab, from the dialog as it opens: the crop area first, then the focal point.
+    await page.keyboard.press('Tab');
+    const firstTab = await focusName(page);
+    const stageByTab = (await hasFocus(stage)) && (await ringShown(stage));
+    await page.keyboard.press('Tab');
+    const secondTab = await focusName(page);
+    const markerByTab = (await hasFocus(marker)) && (await ringShown(marker));
+    check(
+      'Tab from the open dialog reaches the crop area, then the focal point, each with the focus ring showing',
+      boardY > 0 && openedY === boardY && stageByTab && markerByTab,
+      `board scrolled to ${boardY}; first Tab: ${firstTab}, ring ${stageByTab}; second Tab: ${secondTab}, ring ${markerByTab}`,
+    );
+
+    // 5b. Back to the crop area with Shift+Tab. Arrows move the crop.
+    await page.keyboard.press('Shift+Tab');
+    const backOnStage = await hasFocus(stage);
+    await cropKey('Shift+ArrowLeft');
     const moved = await shown(page);
     await page.keyboard.press('ArrowDown');
     feedSrc = await checkFile(
@@ -445,10 +581,13 @@ async function runEditor(browser, name, url) {
     const nudged = await shown(page);
     check(
       'Shift with an arrow key moves a tenth of the photo, an arrow key alone a hundredth',
-      near(moved.crop.x, resized.crop.x - 0.1, 0.002) &&
+      backOnStage &&
+        near(moved.crop.x, resized.crop.x - 0.1, 0.002) &&
         near(nudged.crop.y, moved.crop.y + 0.01, 0.002),
-      `x ${resized.crop.x.toFixed(3)} -> ${moved.crop.x.toFixed(3)}, y ${moved.crop.y.toFixed(3)} -> ${nudged.crop.y.toFixed(3)}`,
+      `crop area reached with Shift+Tab: ${backOnStage}; x ${resized.crop.x.toFixed(3)} -> ${moved.crop.x.toFixed(3)}, y ${moved.crop.y.toFixed(3)} -> ${nudged.crop.y.toFixed(3)}`,
     );
+
+    // 5c. Minus and equals resize the crop by a hundredth.
     await page.keyboard.press('Minus');
     feedSrc = await checkFile(
       'minus shrinks the crop about its centre, and the file follows',
@@ -457,17 +596,163 @@ async function runEditor(browser, name, url) {
       feedSrc,
     );
     const smaller = await shown(page);
-    await page.keyboard.press('Equal');
-    feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+    await cropKey('Equal');
     const larger = await shown(page);
     const centre = (c) => c.x + c.width / 2;
     check(
-      'minus and plus change the width by a hundredth of the photo and keep the centre',
+      'minus and equals change the width by a hundredth of the photo and keep the centre',
       near(smaller.crop.width, nudged.crop.width - 0.01, 0.002) &&
         near(larger.crop.width, nudged.crop.width, 0.002) &&
         near(centre(smaller.crop), centre(nudged.crop), 0.002),
       `width ${nudged.crop.width.toFixed(3)} -> ${smaller.crop.width.toFixed(3)} -> ${larger.crop.width.toFixed(3)}`,
     );
+
+    // 5d. The other keys: Shift makes a step ten times as big (Shift with equals is how plus is
+    //     typed), and the number pad's plus and minus do the same, with and without Shift.
+    const widths = [larger.crop.width];
+    const resizeKeys = [
+      ['Shift+Minus', -0.1],
+      ['Shift+Equal', 0.1],
+      ['NumpadSubtract', -0.01],
+      ['NumpadAdd', 0.01],
+      ['Shift+NumpadSubtract', -0.1],
+      ['Shift+NumpadAdd', 0.1],
+    ];
+    for (const [key] of resizeKeys) {
+      await cropKey(key);
+      widths.push((await shown(page)).crop.width);
+    }
+    check(
+      'Shift makes minus and equals resize by a tenth, and the number pad plus and minus resize too',
+      resizeKeys.every(([, change], index) =>
+        near(widths[index + 1], widths[index] + change, 0.002),
+      ),
+      `width ${widths.map((width) => width.toFixed(3)).join(' -> ')} after ${resizeKeys.map(([key]) => key).join(', ')}`,
+    );
+
+    // 5e. After a mouse click. Focus is first put on the JPG choice with a real click (it is
+    //     already chosen, so that changes nothing). Before the fix, a click on the crop left
+    //     focus there, and the arrow key then switched the card to PNG.
+    await jpgChoice.click();
+    const beforeClick = await shown(page);
+    await clickCrop(page);
+    const afterClick = await shown(page);
+    const stageByClick = await hasFocus(stage);
+    const clickY = await pageY(page);
+    await cropKey('ArrowRight');
+    const afterClickKey = await shown(page);
+    const stillJpg = await jpgChoice.isChecked();
+    check(
+      'a click on the crop gives the crop area focus; the arrow keys then move it and the file type stays the same',
+      stageByClick &&
+        sameCrop(afterClick.crop, beforeClick.crop, 0.0005) &&
+        clickY === boardY &&
+        near(afterClickKey.crop.x, beforeClick.crop.x + 0.01, 0.002) &&
+        stillJpg,
+      `focus on the crop area: ${stageByClick}; the click moved nothing: ${sameCrop(afterClick.crop, beforeClick.crop, 0.0005)}; x ${beforeClick.crop.x.toFixed(3)} -> ${afterClickKey.crop.x.toFixed(3)}; JPG still chosen: ${stillJpg}`,
+    );
+
+    // 5f. After a corner drag, with focus first moved off the crop area by Tab.
+    await page.keyboard.press('Tab');
+    const awayFirst = await hasFocus(marker);
+    await drag(page, 'crop-handle-se', 0.05, 0.05);
+    feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+    const afterCorner = await shown(page);
+    const stageByCorner = await hasFocus(stage);
+    await cropKey('ArrowRight');
+    const afterCornerKey = await shown(page);
+    check(
+      'after a corner drag the keys still go to the crop',
+      awayFirst &&
+        stageByCorner &&
+        afterCorner.crop.width > afterClickKey.crop.width + 0.02 &&
+        near(afterCornerKey.crop.x, afterCorner.crop.x + 0.01, 0.002),
+      `focus was on the focal point: ${awayFirst}; after the drag on the crop area: ${stageByCorner}; x ${afterCorner.crop.x.toFixed(3)} -> ${afterCornerKey.crop.x.toFixed(3)}`,
+    );
+
+    // The crop the rest of this opening must come back to. Everything from here to 5j moves
+    // the focal point or nudges the crop, and is undone with Ctrl-Z before Reset crop.
+    const settled = await shown(page);
+
+    // 5g. The focal point, reached with Tab from the crop area. Arrows move it; minus and
+    //     equals are the crop's keys and do nothing here.
+    await page.keyboard.press('Tab');
+    const markerFocused = (await hasFocus(marker)) && (await ringShown(marker));
+    await page.keyboard.press('ArrowLeft');
+    const focalLeft = await shown(page);
+    await page.keyboard.press('Shift+ArrowDown');
+    const focalDown = await shown(page);
+    await page.keyboard.press('Minus');
+    await page.keyboard.press('Equal');
+    const focalAfterResizeKeys = await shown(page);
+    check(
+      'Tab to the focal point: arrow keys move it, and minus and equals do nothing',
+      markerFocused &&
+        near(focalLeft.focal.x, settled.focal.x - 0.01, 0.002) &&
+        near(focalLeft.focal.y, settled.focal.y, 0.002) &&
+        near(focalDown.focal.y, settled.focal.y + 0.1, 0.002) &&
+        near(focalAfterResizeKeys.focal.x, focalDown.focal.x, 0.0005) &&
+        near(focalAfterResizeKeys.focal.y, focalDown.focal.y, 0.0005) &&
+        sameCrop(focalAfterResizeKeys.crop, settled.crop, 0.0005),
+      `focal ${settled.focal.x.toFixed(3)}, ${settled.focal.y.toFixed(3)} -> ${focalDown.focal.x.toFixed(3)}, ${focalDown.focal.y.toFixed(3)}; crop ${cropText(focalAfterResizeKeys.crop)}`,
+    );
+
+    // 5h. The focal point after a mouse click on it, with focus first put elsewhere.
+    await jpgChoice.click();
+    const markerBox = await marker.boundingBox();
+    await page.mouse.click(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+    const markerByClick = await hasFocus(marker);
+    const focalClicked = await shown(page);
+    await page.keyboard.press('ArrowRight');
+    const focalRight = await shown(page);
+    check(
+      'a click on the focal point gives it focus, and the arrow keys then move it',
+      markerByClick &&
+        near(focalClicked.focal.x, focalDown.focal.x, 0.0005) &&
+        near(focalRight.focal.x, focalDown.focal.x + 0.01, 0.002) &&
+        (await jpgChoice.isChecked()) &&
+        (await pageY(page)) === boardY,
+      `focus on the focal point: ${markerByClick}; x ${focalClicked.focal.x.toFixed(3)} -> ${focalRight.focal.x.toFixed(3)}`,
+    );
+
+    // 5i. The board behind the dialog stays where it is, whatever has focus: the focal point,
+    //     the crop area, and the dialog itself (after a click on plain text in it).
+    const scrolledWith = {};
+    scrolledWith['the focal point'] = await tryToScroll(page);
+    await clickCrop(page);
+    scrolledWith['the crop area'] = await tryToScroll(page);
+    await page.getByRole('dialog').getByText('Photo', { exact: true }).click();
+    const onDialog = await hasFocus(page.getByRole('dialog'));
+    scrolledWith['the dialog'] = await tryToScroll(page);
+    const stayed = Object.values(scrolledWith).every((seen) => seen.every((y) => y === boardY));
+    check(
+      'arrow keys, Page Down, Space and the mouse wheel leave the board where it was',
+      stayed && onDialog,
+      `board at ${boardY}; ${Object.entries(scrolledWith)
+        .map(([where, seen]) => `focus on ${where}: ${[...new Set(seen)].join(', ')}`)
+        .join('; ')}`,
+    );
+
+    // 5j. Ctrl-Z, one press at a time, takes back everything since 5f, and nothing more is
+    //     needed: the crop and the focal point are where they were.
+    let undoPresses = 0;
+    const isSettled = async () => {
+      const now = await shown(page);
+      return (
+        sameCrop(now.crop, settled.crop, 0.0005) &&
+        near(now.focal.x, settled.focal.x, 0.0005) &&
+        near(now.focal.y, settled.focal.y, 0.0005)
+      );
+    };
+    while (!(await isSettled()) && undoPresses < 12) {
+      await page.keyboard.press('Control+z');
+      undoPresses += 1;
+    }
+    if (!(await isSettled())) throw new Error('Ctrl-Z did not put back the crop and focal point');
+    // Let both cards' files catch up before going on.
+    await settle(page);
+    await waitForRendered(page, 2);
+    feedSrc = await tileSrc(page, FEED_CARD);
 
     // 6. Reset crop.
     await page.getByRole('button', { name: 'Reset crop' }).click();
@@ -484,12 +769,70 @@ async function runEditor(browser, name, url) {
       sameCrop(reset.crop, feedAuto) && resetDisabled,
       cropText(reset.crop),
     );
+
+    // 6a. Closing puts the board back exactly where it was, and focus on the Open button: with
+    //     the Close button, and with Esc.
+    await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+    await page.getByRole('dialog').waitFor({ state: 'hidden' });
+    await settle(page);
+    const closedY = await pageY(page);
+    const closedFocus = await hasFocus(openFeed);
+    await openFeed.click();
+    await stage.waitFor({ timeout: 60_000 });
     await closeEditor(page);
+    await settle(page);
+    const escapedY = await pageY(page);
+    const escapedFocus = await hasFocus(openFeed);
+    check(
+      'closing the dialog, with Close or with Esc, leaves the board at the same scroll position and focus on the Open button',
+      closedY === boardY && escapedY === boardY && closedFocus && escapedFocus,
+      `board at ${boardY} before; ${closedY} after Close (focus on Open: ${closedFocus}); ${escapedY} after Esc (focus on Open: ${escapedFocus})`,
+    );
+
+    // 6b. In a short window the dialog is taller than the window: it scrolls inside itself,
+    //     and the board still does not move.
+    await page.setViewportSize({ width: 1280, height: 480 });
+    await openFeed.scrollIntoViewIfNeeded();
+    await settle(page);
+    const shortY = await pageY(page);
+    await openFeed.click();
+    await stage.waitFor({ timeout: 60_000 });
+    const inside = () =>
+      page.evaluate(() => {
+        const element = document.querySelector('dialog');
+        return { top: element.scrollTop, room: element.scrollHeight - element.clientHeight };
+      });
+    const insideBefore = await inside();
+    await page.mouse.move(640, 240);
+    await page.mouse.wheel(0, 120);
+    await settle(page);
+    const insideAfter = await inside();
+    // Past the dialog's own end: the scroll must not carry on into the board.
+    await page.mouse.wheel(0, 5000);
+    await settle(page);
+    await page.mouse.wheel(0, 5000);
+    await settle(page);
+    const insideEnd = await inside();
+    const shortDuring = await pageY(page);
+    await closeEditor(page);
+    await settle(page);
+    const shortAfter = await pageY(page);
+    check(
+      'a dialog taller than the window scrolls inside itself, and the board stays still',
+      insideBefore.room > 0 &&
+        insideBefore.top === 0 &&
+        insideAfter.top > 0 &&
+        insideEnd.top >= insideEnd.room - 1 &&
+        shortDuring === shortY &&
+        shortAfter === shortY,
+      `dialog scrolled ${insideBefore.top} -> ${insideAfter.top} -> ${insideEnd.top} of ${insideEnd.room}; board at ${shortY}, ${shortDuring} while scrolling, ${shortAfter} after closing`,
+    );
+    await page.setViewportSize({ width: 1280, height: 900 });
 
     // 7. Adjust the square card by hand, so the focal move below must leave it alone.
     await openEditor(page, SQUARE_CARD);
     let squareSrc = await tileSrc(page, SQUARE_CARD);
-    await page.getByRole('application').focus();
+    await clickCrop(page);
     await page.keyboard.press('ArrowRight');
     squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
     const squareAdjusted = (await shown(page)).crop;
@@ -782,7 +1125,7 @@ async function runEditor(browser, name, url) {
 
     // 17a. Clicking the file type the card already has is not a change: no undo step.
     const squareBefore = (await shown(page)).crop;
-    await page.getByRole('application').focus();
+    await tabTo(page, page.getByRole('application'), 'the crop area');
     await page.keyboard.press('Shift+ArrowLeft');
     if (sameCrop((await shown(page)).crop, squareBefore)) {
       await page.keyboard.press('Shift+ArrowRight');
@@ -824,14 +1167,16 @@ async function runEditor(browser, name, url) {
     );
 
     // 17c. One Ctrl-Z, with focus on the PNG radio, goes back to JPG at the quality it had.
-    await pngRadio.focus();
+    //      Focus is there because the radio was just clicked.
+    const onPngRadio = await hasFocus(pngRadio);
     await page.keyboard.press('Control+z');
     squareSrc = await nextRender(page, SQUARE_CARD, squareSrc);
     const backFile = await inspect(page, squareSrc);
     const backCaption = await captionFor(backFile);
     check(
       'one Ctrl-Z on the PNG radio goes back to JPG at 90%, made again as a JPG',
-      backFile.type === 'jpeg' &&
+      onPngRadio &&
+        backFile.type === 'jpeg' &&
         (await jpgRadio.isChecked()) &&
         (await qualityLine()) === 'Quality: 90%' &&
         backCaption.startsWith(`${SQUARE.width} × ${SQUARE.height} JPG · `),
@@ -877,7 +1222,9 @@ async function runEditor(browser, name, url) {
       `during "${mouseDuring}", after "${mouseAfter}" (${lowFile.bytes} bytes against ${backFile.bytes} at 90%), after one Ctrl-Z "${mouseUndone}"`,
     );
 
-    // 17e. A touch drag, sent as real touch input, is one undo step too.
+    // 17e. A touch drag, sent as real touch input, is one undo step too. It goes through the
+    //      DevTools protocol because Playwright's mouse cannot make a touch; the browser still
+    //      turns it into its own pointer events, which is what is checked below.
     const cdp = await context.newCDPSession(page);
     const touch = (type, x) =>
       cdp.send('Input.dispatchTouchEvent', {
@@ -904,7 +1251,10 @@ async function runEditor(browser, name, url) {
     );
 
     // 17f. A key held down is one undo step; with nothing left, Ctrl-Z changes nothing.
-    await slider.focus();
+    //      The slider is reached with Tab from the JPG choice, which is clicked first (it is
+    //      already chosen, so the click changes nothing).
+    await jpgRadio.click();
+    await tabTo(page, slider, 'the quality slider');
     for (let i = 0; i < 3; i++) await page.keyboard.down('ArrowLeft');
     const heldDuring = await qualityLine();
     await page.keyboard.up('ArrowLeft');
@@ -925,7 +1275,35 @@ async function runEditor(browser, name, url) {
     );
     await closeEditor(page);
 
-    // 18. Network and console.
+    // 18. With scrollbars that take up room (this browser is started with them; the one above
+    //     hides them), opening and closing the dialog does not move the board sideways.
+    const wide = await scrollbarBrowser.newContext({ viewport: { width: 1280, height: 600 } });
+    try {
+      const other = await wide.newPage();
+      await startSession(other, url);
+      const firstCard = () =>
+        other.evaluate(() => ({
+          x: document.querySelector('article').getBoundingClientRect().x,
+          scrollbar: window.innerWidth - document.documentElement.clientWidth,
+        }));
+      const sideBefore = await firstCard();
+      await openEditor(other, FEED_CARD);
+      const sideOpen = await firstCard();
+      await closeEditor(other);
+      const sideAfter = await firstCard();
+      check(
+        'with scrollbars that take up room, opening and closing the dialog does not move the board sideways',
+        sideBefore.scrollbar > 0 &&
+          sideOpen.x === sideBefore.x &&
+          sideAfter.x === sideBefore.x &&
+          sideAfter.scrollbar === sideBefore.scrollbar,
+        `scrollbar ${sideBefore.scrollbar}px wide; first card's x ${sideBefore.x} before, ${sideOpen.x} open, ${sideAfter.x} after`,
+      );
+    } finally {
+      await wide.close();
+    }
+
+    // 19. Network and console.
     const outside = requests.filter((r) => !r.url.startsWith(url) && !/^(blob|data):/.test(r.url));
     check(
       `every request stays under ${url}`,
@@ -950,12 +1328,14 @@ async function runEditor(browser, name, url) {
 
 let failed = false;
 const browser = await chromium.launch();
+// The same browser, but with its scrollbars left on: Playwright hides them by default.
+const scrollbarBrowser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
 try {
   console.log(`Chromium ${browser.version()}; report in ${outDir}`);
 
   const devUrl = `http://localhost:${PORTS.dev}/`;
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, devUrl);
-  failed = !(await runEditor(browser, 'dev', devUrl)) || failed;
+  failed = !(await runEditor(browser, scrollbarBrowser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -969,12 +1349,13 @@ try {
     { BASE_PATH: BASE },
     siteUrl,
   );
-  failed = !(await runEditor(browser, 'production', siteUrl)) || failed;
+  failed = !(await runEditor(browser, scrollbarBrowser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);
 } finally {
   await browser.close();
+  await scrollbarBrowser.close();
   stopServers();
 }
 console.log(failed ? '\nRESULT: FAILED' : '\nRESULT: all checks passed');

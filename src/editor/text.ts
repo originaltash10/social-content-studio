@@ -2,8 +2,15 @@
 
 import type { Rect } from '../types';
 
+/** What Shift does to a key, in the crop area's name and the marker's. */
+const SHIFT_TEXT = 'Hold Shift for steps ten times as big.';
+
+/**
+ * The crop area's accessible name: what it is and what the keys do. It names the keys as they
+ * are pressed without Shift (equals, not plus), because Shift is what makes a step bigger.
+ */
 export function stageLabel(fileName: string): string {
-  return `Crop of ${fileName}. Arrow keys move the crop. Plus and minus resize it. Hold Shift for bigger steps.`;
+  return `Crop of ${fileName}. Arrow keys move the crop. Equals makes it bigger and minus makes it smaller. ${SHIFT_TEXT}`;
 }
 
 const whole = (fraction: number) => Math.round(fraction * 100);
@@ -21,7 +28,7 @@ export type FocalKind = 'shared' | 'own';
 
 /** The marker's accessible name: what it is, whose it is, and what the arrow keys do. */
 export function focalLabel(fileName: string, kind: FocalKind): string {
-  const keys = 'Arrow keys move it. Hold Shift for bigger steps.';
+  const keys = `Arrow keys move it. ${SHIFT_TEXT}`;
   return kind === 'own'
     ? `This card's own focal point on ${fileName}. Moving it changes only this card. ${keys}`
     : `Focal point of ${fileName}, shared with this photo's other cards. ${keys}`;

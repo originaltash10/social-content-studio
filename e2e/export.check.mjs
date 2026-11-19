@@ -498,6 +498,8 @@ async function runExportCheck(browser, name, url) {
     await page.getByLabel('Name').fill(SESSION_NAME);
     await page.getByRole('button', { name: 'New session' }).click();
     const photo = await makePhoto(page);
+    // The system's file picker cannot be driven, so files are given to the inputs directly
+    // (here and wherever setInputFiles is used below).
     await page.getByLabel('Photos to import').setInputFiles({
       name: PHOTO,
       mimeType: 'image/jpeg',
@@ -700,7 +702,10 @@ async function runExportCheck(browser, name, url) {
     await page.waitForFunction(() => window.__held.length >= 1, undefined, { timeout: 60_000 });
     await page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true }).click();
     await page.getByRole('application').waitFor({ timeout: 60_000 });
-    await page.getByRole('application').focus();
+    // A real click inside the crop, clear of the marker in its middle, gives the crop area
+    // focus; the key then goes to whatever has focus.
+    const cropBox = await page.getByTestId('crop-rect').boundingBox();
+    await page.mouse.click(cropBox.x + cropBox.width / 4, cropBox.y + cropBox.height / 4);
     await page.keyboard.press('Shift+ArrowLeft');
     await page.keyboard.press('Escape');
     await page.getByRole('dialog').waitFor({ state: 'hidden' });
@@ -775,7 +780,13 @@ async function runExportCheck(browser, name, url) {
     async function exportAtQuality(keys, percent) {
       await page.getByRole('button', { name: `Open ${noiseCard}`, exact: true }).click();
       const quality = page.getByRole('dialog').getByRole('slider', { name: 'Quality' });
-      await quality.focus();
+      // Reached with Tab, as a person reaches it, from where focus is when the dialog opens.
+      let reached = false;
+      for (let presses = 0; presses < 12 && !reached; presses++) {
+        await page.keyboard.press('Tab');
+        reached = await quality.evaluate((element) => element === document.activeElement);
+      }
+      if (!reached) throw new Error('Tab did not reach the quality slider');
       for (const key of keys) await page.keyboard.press(key);
       const shownText = await page
         .getByRole('dialog')

@@ -148,6 +148,7 @@ async function importRegression(browser, url, allowedPrefix) {
     return btoa(String.fromCharCode(...bytes));
   });
   await page.getByRole('button', { name: 'New session' }).click();
+  // The system's file picker cannot be driven, so the files are given to the input directly.
   await page.getByLabel('Photos to import').setInputFiles([
     { name: 'blue.png', mimeType: 'image/png', buffer: Buffer.from(pngBase64, 'base64') },
     {

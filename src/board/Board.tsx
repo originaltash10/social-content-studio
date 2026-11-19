@@ -39,6 +39,7 @@ import { Editor } from '../editor/Editor';
 import type { PhotoLoader } from '../editor/useSourcePhoto';
 import { CardDetails } from './CardDetails';
 import { createDialogUndo } from './dialogUndo';
+import { lockPageScroll } from './scrollLock';
 import { CardTile } from './CardTile';
 import { CreateCards } from './CreateCards';
 
@@ -97,6 +98,8 @@ export function Board({
   const [openId, setOpenId] = useState<string | null>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
+  /** Lets the page scroll again; set while the dialog is open. */
+  const unlockScroll = useRef<(() => void) | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const createButton = useRef<HTMLButtonElement>(null);
   const formId = useId();
@@ -172,15 +175,35 @@ export function Board({
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    if (openCard && !element.open) element.showModal();
+    if (openCard && !element.open) {
+      element.showModal();
+      // The board must stay where it is behind the dialog (src/board/scrollLock.ts).
+      unlockScroll.current = lockPageScroll();
+      // The browser puts focus on the first control it finds, which is past the editor while
+      // the photo is still being opened. Start at the heading instead, so Tab goes through the
+      // dialog from the top: crop area, focal point, Reset crop, file type, and Close last.
+      document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
+    }
     if (!openCard && element.open) element.close();
-  }, [openCard]);
+  }, [openCard, dialogHeadingId]);
 
+  /** Lets the page scroll again, back where it was when the dialog opened. */
+  function releaseScroll() {
+    unlockScroll.current?.();
+    unlockScroll.current = null;
+  }
+  // If the board goes away with the dialog open, the page must not stay locked.
+  useEffect(() => releaseScroll, []);
+
+  // Every way of closing the dialog ends here: Esc, its Close button, and the board closing it
+  // because its card or its session went away.
   function onDialogClose() {
     setOpenId(null);
+    releaseScroll();
     const target = opener.current?.isConnected ? opener.current : heading.current;
     opener.current = null;
-    target?.focus();
+    // Without scrolling: the page is already exactly where it was.
+    target?.focus({ preventScroll: true });
   }
 
   function onCreate(chosen: Asset[], specs: PlacementSpec[]) {
@@ -362,7 +385,7 @@ export function Board({
       <dialog
         ref={dialog}
         aria-labelledby={dialogHeadingId}
-        className="m-auto w-[min(64rem,calc(100vw-2rem))] rounded-card bg-surface p-6 text-ink backdrop:bg-ink/40"
+        className="m-auto w-[min(64rem,calc(100vw-2rem))] overscroll-contain rounded-card bg-surface p-6 text-ink backdrop:bg-ink/40"
         onClose={onDialogClose}
       >
         {openCard && (

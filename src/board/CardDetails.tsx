@@ -72,7 +72,8 @@ export function CardDetails({
   const issues = card.validation.issues;
   return (
     <div className="flex flex-col gap-4">
-      <h2 id={headingId} className="font-heading text-lg font-semibold">
+      {/* The card dialog puts focus here when it opens, so Tab then starts at the editor. */}
+      <h2 id={headingId} tabIndex={-1} className="font-heading text-lg font-semibold">
         {name}
       </h2>
 

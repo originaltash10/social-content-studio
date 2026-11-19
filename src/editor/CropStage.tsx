@@ -12,6 +12,12 @@
  * release. While it is dragged, `cropFor` says what the crop would become, so the crop is seen
  * to follow.
  *
+ * Focus. A press that starts a drag also gives keyboard focus to what was pressed: the crop area
+ * for the crop and its corners, the marker for the marker. The arrow keys then work straight
+ * after a mouse action. The press's own default is stopped (it would select text or start a
+ * native drag), and that default is also what would have moved focus, so focus is moved here,
+ * without scrolling anything.
+ *
  * Everything is placed in percentages of the photo's frame, so the area can change size with
  * the dialog or the window without the crop changing: a crop is always fractions of the photo.
  */
@@ -65,6 +71,7 @@ const sameRect = (a: Rect, b: Rect) =>
 
 export function CropStage(props: CropStageProps) {
   const { photo, crop, limits, onCommit } = props;
+  const stage = useRef<HTMLDivElement>(null);
   const frame = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
@@ -90,6 +97,9 @@ export function CropStage(props: CropStageProps) {
 
   function begin(event: PointerEvent<HTMLElement>, next: Drag) {
     event.preventDefault();
+    // preventDefault also stops the press from moving focus, so move it here.
+    const target = next.kind === 'focal' ? event.currentTarget : stage.current;
+    target?.focus({ preventScroll: true });
     // Not every browser-like environment has pointer capture; the drag still works without it
     // for as long as the pointer stays over the element.
     event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -101,8 +111,6 @@ export function CropStage(props: CropStageProps) {
   function onFocalStart(event: PointerEvent<HTMLButtonElement>) {
     const box = frameBox();
     if (!event.isPrimary || event.button !== 0 || drag.current || !box) return;
-    // preventDefault stops the press from focusing the marker, so focus it here.
-    event.currentTarget.focus();
     begin(event, {
       kind: 'focal',
       pointerId: event.pointerId,
@@ -184,6 +192,7 @@ export function CropStage(props: CropStageProps) {
   const { width, height } = photo.source;
   return (
     <div
+      ref={stage}
       role="application"
       tabIndex={0}
       aria-label={props.label}
