@@ -1,18 +1,18 @@
-/** One card on the board: its preview, what it is, its result, and its actions. */
+/**
+ * One card on the board: its preview, what it is, its result, and its actions.
+ *
+ * While the card is rendered again the tile keeps its height: the last finished picture stays,
+ * dimmed, with the progress over it, and the file line says "Updating…" until the new file.
+ */
 
 import type { CardRender } from '../lib/board/controller';
-import { progressLabel, progressPercent } from '../lib/board/controller';
 import type { VersionInfo } from '../lib/board/versions';
 import { lineageLabel, versionLabel } from '../lib/board/versions';
-import {
-  isPending,
-  previewAlt,
-  renderedFileLabel,
-  resultOf,
-  upscaledNote,
-} from '../lib/board/view';
+import { isPending, previewAlt, resultOf, upscaledNote } from '../lib/board/view';
 import type { Card } from '../types';
 import { badgeClass, buttonClass, resultTextClass } from '../app/styles';
+import { CANCELLED_TEXT, captionText, useLastDone } from './lastDone';
+import { FilePreview } from './RenderedFile';
 import { ResultBadge } from './ResultBadge';
 import { firstReason } from './reason';
 
@@ -40,35 +40,33 @@ export function CardTile(props: CardTileProps) {
   const { card, name, label, size, fileName, render, version } = props;
   const pending = isPending(render);
   const lineage = lineageLabel(version);
-  const shape = render?.kind === 'done' ? render : size;
-  // Reasons are shown once the file is checked, like the badge they explain.
-  const reason = render?.kind === 'done' ? firstReason(card.validation) : null;
+  // The last finished file, kept while the card is rendered again.
+  const shown = useLastDone(card.id, render);
+  // Reasons are shown once a file is checked. During a re-render the last file's reason stays,
+  // as the card's checks only change when the new result arrives.
+  const reason = shown ? firstReason(card.validation) : null;
+  const fileLine = captionText(render, shown);
 
   return (
     <article
       aria-label={label}
       className="flex h-full flex-col gap-2 rounded-card border border-page bg-surface p-3"
     >
-      <div
-        className="flex items-center justify-center overflow-hidden rounded-control bg-page"
-        style={shape ? { aspectRatio: `${shape.width} / ${shape.height}` } : undefined}
-      >
-        {render?.kind === 'done' ? (
-          <img
-            src={render.url}
-            alt={previewAlt(card, fileName, name)}
-            className="h-full w-full object-contain"
-          />
-        ) : (
-          <span className="p-2 text-center text-label text-muted-text">
-            {render?.kind === 'failed'
-              ? 'No preview'
-              : render?.kind === 'cancelled'
-                ? 'Cancelled'
-                : 'Preview coming'}
-          </span>
-        )}
-      </div>
+      <FilePreview
+        render={render}
+        shown={shown}
+        alt={previewAlt(card, fileName, name)}
+        progressName={`Rendering ${label}`}
+        boxClassName="w-full"
+        shape={shown ?? size}
+        emptyText={
+          render?.kind === 'failed'
+            ? 'No preview'
+            : render?.kind === 'cancelled'
+              ? 'Cancelled'
+              : 'Preview coming'
+        }
+      />
 
       <h4 className="font-heading font-semibold">{name}</h4>
 
@@ -84,35 +82,13 @@ export function CardTile(props: CardTileProps) {
       )}
       {lineage && <p className="text-label text-muted-text">{lineage}</p>}
 
-      {render?.kind === 'done' && (
-        <p className="text-label text-ink-secondary">{renderedFileLabel(render)}</p>
-      )}
-      {render?.kind === 'done' && render.upscaled && (
-        <p className="text-label text-ink-secondary">{upscaledNote(render.width, render.height)}</p>
+      {fileLine && <p className="text-label text-ink-secondary">{fileLine}</p>}
+      {shown?.upscaled && (
+        <p className="text-label text-ink-secondary">{upscaledNote(shown.width, shown.height)}</p>
       )}
       {render?.kind === 'failed' && <p className="text-label text-red-700">{render.message}</p>}
       {render?.kind === 'cancelled' && (
-        <p className="text-label text-ink-secondary">Cancelled before the file was made.</p>
-      )}
-
-      {pending && (
-        <div className="flex flex-col gap-1">
-          <div
-            role="progressbar"
-            aria-label={`Rendering ${label}`}
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={progressPercent(render)}
-            aria-valuetext={progressLabel(render)}
-            className="h-2 overflow-hidden rounded-control bg-page"
-          >
-            <div
-              className="h-full bg-accent transition-[width]"
-              style={{ width: `${progressPercent(render)}%` }}
-            />
-          </div>
-          <p className="text-label text-muted-text">{progressLabel(render)}</p>
-        </div>
+        <p className="text-label text-ink-secondary">{CANCELLED_TEXT}</p>
       )}
 
       <div className="mt-auto flex flex-wrap gap-2 pt-1">

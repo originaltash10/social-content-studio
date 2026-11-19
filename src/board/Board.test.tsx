@@ -425,6 +425,88 @@ describe('progress, cancel and failures', () => {
     expect(note).not.toHaveClass('text-highlight-text');
   });
 
+  it('keeps a tile the same height while its card is rendered again', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0, { upscaled: true });
+    await idle();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    const tile = () => article(label);
+    // jsdom has no layout, so the height is stood for by the tile's rows: the same elements in
+    // the same places, each with text. The browser check measures the real height.
+    const rows = () =>
+      [...tile().children].map((row) => `${row.tagName}${row.className}:${row.textContent !== ''}`);
+    const before = rows();
+    const picture = within(tile()).getByRole('img');
+    const { width, height } = sizeOf(FEED);
+    expect(tile()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(2);
+    act(() => client.calls[1]?.onProgress('encoding'));
+    // The same picture, dimmed, with the progress over it; "Updating…" in the file's line.
+    expect(within(tile()).getByRole('img')).toBe(picture);
+    expect(picture).toHaveAttribute('src', 'blob:render-1');
+    expect(picture).toHaveAttribute('data-updating', 'true');
+    const bar = within(tile()).getByRole('progressbar', { name: `Rendering ${label}` });
+    expect(bar.parentElement).toBe(picture.parentElement);
+    expect(within(tile()).getByText('Updating…')).toHaveClass('text-label');
+    // The enlarged note and the reason stay until the new result arrives.
+    expect(tile()).toHaveTextContent('Note: enlarged to fit.');
+    expect(within(tile()).getByText('Alt text is missing')).toBeInTheDocument();
+    expect(within(tile()).getByText('Not checked yet')).toBeInTheDocument();
+    expect(rows()).toEqual(before);
+
+    answer(1, { upscaled: true, bytes: 1_234_567 });
+    await idle();
+    expect(within(tile()).getByRole('img')).toBe(picture);
+    expect(picture).toHaveAttribute('src', 'blob:render-2');
+    expect(picture).not.toHaveAttribute('data-updating');
+    expect(tile()).toHaveTextContent(`${width} × ${height} JPG · 1.2 MB`);
+    expect(within(tile()).queryByRole('progressbar')).toBeNull();
+    expect(rows()).toEqual(before);
+  });
+
+  it("shows a placeholder with the progress over it before a tile's first file", async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    act(() => client.calls[0]?.onProgress('decoding'));
+    const tile = article(/Feed vertical/);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    const bar = within(tile).getByRole('progressbar');
+    expect(bar.parentElement).toHaveTextContent('Preview coming');
+    expect(bar.parentElement?.style.aspectRatio).toBe(
+      `${sizeOf(FEED).width} / ${sizeOf(FEED).height}`,
+    );
+    expect(within(tile).getByText('Opening the photo')).toBeInTheDocument();
+  });
+
+  it('starts from the placeholder again after a cancel, as the old file is gone', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(2);
+    fireEvent.click(button(`Cancel ${label}`));
+    const tile = article(label);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    expect(tile).toHaveTextContent('Cancelled before the file was made.');
+    expect(within(tile).queryByText('Alt text is missing')).toBeNull();
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(3);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    expect(tile).toHaveTextContent('Preview coming');
+    expect(tile).toHaveTextContent('Waiting to render');
+  });
+
   it('shows the first reason for a result on the card, and how many more there are', async () => {
     openSession(PHOTO);
     renderBoard();
