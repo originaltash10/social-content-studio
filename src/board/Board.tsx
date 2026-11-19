@@ -396,6 +396,7 @@ export function Board({
               fileName={openAsset?.fileName ?? 'A photo that is not in this session'}
               editor={editorFor(openCard, openAsset)}
               render={renders.get(openCard.id)}
+              size={describe(openCard).spec?.sizes[0] ?? null}
               version={versions.get(openCard.id) as VersionInfo}
               headingId={dialogHeadingId}
               undo={dialogUndo}

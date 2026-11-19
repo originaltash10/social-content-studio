@@ -15,7 +15,6 @@
 import type { ReactNode } from 'react';
 
 import type { CardRender } from '../lib/board/controller';
-import { progressLabel, progressPercent } from '../lib/board/controller';
 import type { VersionInfo } from '../lib/board/versions';
 import { versionDescription } from '../lib/board/versions';
 import {
@@ -32,6 +31,8 @@ import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
 import type { DialogUndo } from './dialogUndo';
 import { FileTypeControls } from './FileTypeControls';
+import { UPDATING_TEXT, useLastDone } from './lastDone';
+import { RenderedFile } from './RenderedFile';
 import { ResultBadge } from './ResultBadge';
 
 export type CardDetailsProps = {
@@ -39,6 +40,8 @@ export type CardDetailsProps = {
   name: string;
   fileName: string;
   render: CardRender | undefined;
+  /** The placement's size, to shape the rendered file's box before the first file. */
+  size?: { width: number; height: number } | null;
   version: VersionInfo;
   headingId: string;
   /** The editor for this card. Without one, the rendered preview is shown instead. */
@@ -62,6 +65,7 @@ export function CardDetails({
   name,
   fileName,
   render,
+  size = null,
   version,
   headingId,
   editor,
@@ -69,6 +73,10 @@ export function CardDetails({
 }: CardDetailsProps) {
   const record = undo?.record ?? runChange;
   const done = render?.kind === 'done' ? render : null;
+  // The last finished file, kept while the card is rendered again so nothing changes size.
+  const shown = useLastDone(card.id, render);
+  const updating = shown !== null && done === null;
+  const hasFileArea = editor !== undefined;
   const issues = card.validation.issues;
   return (
     <div className="flex flex-col gap-4">
@@ -96,7 +104,7 @@ export function CardDetails({
             <dt className="text-label text-muted-text">Photo</dt>
             <dd>{fileName}</dd>
             <dt className="text-label text-muted-text">File</dt>
-            <dd>{done ? renderedFileLabel(done) : 'Not made yet'}</dd>
+            <dd>{done ? renderedFileLabel(done) : updating ? UPDATING_TEXT : 'Not made yet'}</dd>
             <dt className="text-label text-muted-text">Version</dt>
             <dd>{versionDescription(version)}</dd>
             <dt className="text-label text-muted-text">Result</dt>
@@ -105,14 +113,18 @@ export function CardDetails({
             </dd>
           </dl>
 
-          {done?.upscaled && (
-            <p className="text-ink-secondary">{upscaledNote(done.width, done.height)}</p>
+          {/* During a re-render, the last file's note stays until the new result arrives. */}
+          {shown?.upscaled && (
+            <p className="text-ink-secondary">{upscaledNote(shown.width, shown.height)}</p>
           )}
-          {render?.kind === 'failed' && <p className="text-red-700">{render.message}</p>}
+          {/* With a Rendered file area, a failure is said there instead, in the file's place. */}
+          {render?.kind === 'failed' && !hasFileArea && (
+            <p className="text-red-700">{render.message}</p>
+          )}
 
           <section aria-label="Checks" className="flex flex-col gap-2">
             <h3 className="font-heading font-semibold">Checks</h3>
-            {!done && <p className="text-ink-secondary">{NOT_RENDERED_NOTE}</p>}
+            {!shown && <p className="text-ink-secondary">{NOT_RENDERED_NOTE}</p>}
             {issues.length === 0 ? (
               <p className="text-success-text">No problems found.</p>
             ) : (
@@ -156,46 +168,22 @@ export function CardDetails({
             </section>
           )}
 
-          {editor !== undefined && (
-            <section aria-label="Rendered file" className="flex flex-col gap-2">
+          {hasFileArea && (
+            // Busy while a file is being made. There is no live region here, so the renders
+            // made while the crop moves are not announced; the board's progress line still is.
+            <section
+              aria-label="Rendered file"
+              aria-busy={isPending(render)}
+              className="flex flex-col gap-2"
+            >
               <h3 className="font-heading font-semibold">Rendered file</h3>
-              {done ? (
-                // The file's type and size under it, so a change of file type or quality shows.
-                <figure className="flex flex-col gap-1 self-start">
-                  <img
-                    src={done.url}
-                    alt={previewAlt(card, fileName, name)}
-                    className="max-h-48 self-start rounded-control bg-page object-contain"
-                  />
-                  <figcaption className="text-label text-muted-text">
-                    {renderedFileLabel(done)}
-                  </figcaption>
-                </figure>
-              ) : isPending(render) ? (
-                <div className="flex flex-col gap-1">
-                  <div
-                    role="progressbar"
-                    aria-label={`Rendering ${name}`}
-                    aria-valuemin={0}
-                    aria-valuemax={100}
-                    aria-valuenow={progressPercent(render)}
-                    aria-valuetext={progressLabel(render)}
-                    className="h-2 overflow-hidden rounded-control bg-page"
-                  >
-                    <div
-                      className="h-full bg-accent transition-[width]"
-                      style={{ width: `${progressPercent(render)}%` }}
-                    />
-                  </div>
-                  <p className="text-label text-muted-text">{progressLabel(render)}</p>
-                </div>
-              ) : (
-                <p className="text-ink-secondary">
-                  {render?.kind === 'cancelled'
-                    ? 'Cancelled before the file was made.'
-                    : 'No preview yet.'}
-                </p>
-              )}
+              <RenderedFile
+                render={render}
+                shown={shown}
+                alt={previewAlt(card, fileName, name)}
+                progressName={`Rendering ${name}`}
+                size={size}
+              />
             </section>
           )}
         </div>
