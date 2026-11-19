@@ -559,6 +559,23 @@ describe('the details dialog', () => {
     expect(within(checks).getAllByRole('listitem')[0]).toHaveTextContent(/^Warning:/);
   });
 
+  it('puts focus on its heading when it opens, so Tab starts at the top of the dialog', async () => {
+    const { dialog } = await openDetails();
+    const heading = within(dialog).getByRole('heading', { level: 2 });
+    expect(heading).toHaveFocus();
+    expect(heading.tabIndex).toBe(-1);
+    // Focus stays there when the photo opens and the editor appears.
+    await showPhoto();
+    expect(heading).toHaveFocus();
+    // The crop area and the marker come next in the document, before every other control.
+    const controls = [
+      ...dialog.querySelectorAll<HTMLElement>('[tabindex="0"], button, input'),
+    ].filter((element) => !(element as HTMLButtonElement).disabled);
+    expect(controls[0]).toBe(within(dialog).getByRole('application'));
+    expect(controls[1]).toBe(within(dialog).getByTestId('focal-marker'));
+    expect(controls.at(-1)).toBe(within(dialog).getByRole('button', { name: 'Close' }));
+  });
+
   it('closes with Esc and returns focus to the Open button', async () => {
     const { opener, dialog } = await openDetails();
     pressEscape(dialog);

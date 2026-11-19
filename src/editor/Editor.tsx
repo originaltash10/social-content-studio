@@ -72,10 +72,11 @@ export type EditorProps = {
 
 export const LOADING_TEXT = 'Opening the photo so you can adjust the crop…';
 export const HELP_TEXT =
-  'Drag the crop to move it, or drag a corner to resize it. With the crop area selected, the ' +
-  'arrow keys move it, and plus and minus resize it; hold Shift for bigger steps. The round ' +
-  'marker is the focal point, which automatic crops are centred on: drag it, or select it and ' +
-  'use the arrow keys.';
+  'Drag the crop to move it, or drag a corner to resize it. Click the crop or press Tab to ' +
+  'select it; then the arrow keys move it, the = key makes it bigger and the - key makes it ' +
+  'smaller. Hold Shift for steps ten times as big. The plus and minus keys on a number pad ' +
+  'work too. The round marker is the focal point, which automatic crops are centred on: drag ' +
+  'it, or select it and use the arrow keys.';
 
 /** A card's output size, from src/data/platforms.json; undefined for an unknown placement. */
 const targetOf = (card: Card) => getPlacement(card.platform, card.placement)?.sizes[0];

@@ -172,9 +172,15 @@ export function Board({
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    if (openCard && !element.open) element.showModal();
+    if (openCard && !element.open) {
+      element.showModal();
+      // The browser puts focus on the first control it finds, which is past the editor while
+      // the photo is still being opened. Start at the heading instead, so Tab goes through the
+      // dialog from the top: crop area, focal point, Reset crop, file type, and Close last.
+      document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
+    }
     if (!openCard && element.open) element.close();
-  }, [openCard]);
+  }, [openCard, dialogHeadingId]);
 
   function onDialogClose() {
     setOpenId(null);
