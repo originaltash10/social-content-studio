@@ -50,6 +50,11 @@ export type Card = {
   parentId?: string; // set when duplicated; gives lineage
   /** 0..1. The card's own focal point, set when duplicated. Without it the card uses its photo's. */
   focal?: { x: number; y: number };
+  /**
+   * "#rrggbb" in lowercase. Fills any space where the crop goes past the photo's edges.
+   * Without it the card is white.
+   */
+  background?: string;
   version: number;
   status: 'draft' | 'review' | 'approved';
   edit: ImageEdit | VideoEdit | CarouselEdit;

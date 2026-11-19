@@ -4,9 +4,17 @@ import { saveToFolder } from '../lib/session/fsAccess';
 import { forgetFolder, recallFolder, rememberFolder } from '../lib/session/handleStore';
 import { serializeBrand, serializeSession } from '../lib/session/serialize';
 import { buildBundle } from '../lib/session/zip';
-import { hash, makeAsset, makeBrand, makeCard, makeSession } from '../test/fixtures';
+import {
+  CARD_COLOUR,
+  PADDED_CROP,
+  hash,
+  makeAsset,
+  makeBrand,
+  makeCard,
+  makeSession,
+} from '../test/fixtures';
 import { MockDir, domError } from '../test/mockFs';
-import type { Session } from '../types';
+import type { Card, ImageEdit, Session } from '../types';
 import {
   AUTOSAVE_MS,
   autosave,
@@ -514,6 +522,71 @@ describe('validation results', () => {
     await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
     stop();
     expect(writes(dir)).toEqual(['write brand.json', 'write session.json']);
+  });
+});
+
+describe('a background colour and a crop with padding', () => {
+  const crop = PADDED_CROP;
+
+  function padAndColour() {
+    expect(
+      store().updateCard('card-1', (card) => {
+        card.background = CARD_COLOUR;
+        if ('format' in card.edit) card.edit.crop = { ...crop };
+      }),
+    ).toBe(true);
+  }
+  const card1 = () => open().cards.find((card) => card.id === 'card-1') as Card;
+
+  it('survive a save and reopening the folder', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    padAndColour();
+    expect(await saveSession()).toBe(true);
+    await requestClearSession(() => true);
+    expect(store().session).toBeNull();
+    await openFolder(dir);
+    expect(card1().background).toBe(CARD_COLOUR);
+    expect((card1().edit as ImageEdit).crop).toEqual(crop);
+    expect(store().dirty).toBe(false);
+    expect(store().undoStack).toEqual([]);
+  });
+
+  it('survive a .scs download and loading it again', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    padAndColour();
+    expect(await downloadBundle()).toBe(true);
+    const [bundle] = vi.mocked(downloadBlob).mock.calls[0] ?? [];
+    await requestClearSession(() => true);
+    expect(await loadBundle(bundle ?? new Blob(), 'padded.scs')).toBe(true);
+    expect(card1().background).toBe(CARD_COLOUR);
+    expect((card1().edit as ImageEdit).crop).toEqual(crop);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('a card with no colour is saved and reopened with none, and no colour is written', async () => {
+    // The fixture session is like one the app has just made: no card has a colour.
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    expect(Object.hasOwn(card1(), 'background')).toBe(false);
+    edit();
+    expect(await saveSession()).toBe(true);
+    expect(await dir.text('session.json')).not.toContain('background');
+    await requestClearSession(() => true);
+    await openFolder(dir);
+    for (const card of open().cards) expect(Object.hasOwn(card, 'background')).toBe(false);
+  });
+
+  it('a colour that is taken off again is not written', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    padAndColour();
+    expect(await saveSession()).toBe(true);
+    expect(await dir.text('session.json')).toContain(`"background": "${CARD_COLOUR}"`);
+    expect(store().undo()).toBe(true);
+    expect(await saveSession()).toBe(true);
+    expect(await dir.text('session.json')).not.toContain('background');
   });
 });
 

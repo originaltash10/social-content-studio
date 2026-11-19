@@ -12,11 +12,15 @@ import {
   hash,
   makeAsset,
   makeBrand,
+  CARD_COLOUR,
+  PADDED_CROP,
   makeCard,
+  makeColouredCard,
+  makeImageEdit,
   makeSession,
   withInjectedKeys,
 } from '../../test/fixtures';
-import type { BrandKit, Card, Session } from '../../types';
+import type { BrandKit, Card, ImageEdit, Session } from '../../types';
 
 /** The i-th entry of a raw JSON list, as an object. */
 function item(list: unknown, i: number): Record<string, unknown> {
@@ -71,6 +75,7 @@ describe('session.json', () => {
     const text = serializeSession(session);
     expect(parseSession(text)).toEqual(JSON.parse(text));
     expect(text).not.toContain('parentId');
+    expect(text).not.toContain('background');
     expect(text).not.toContain('plannedDate');
   });
 
@@ -260,6 +265,125 @@ describe('session.json', () => {
       cards: [makeCard({ focal: { x: 0.3, y: 0.6, apiKey: SECRET } as Card['focal'] })],
     });
     expect(serializeSession(leaky)).not.toContain(SECRET);
+  });
+
+  it("round-trips a card's background colour", () => {
+    const session = makeSession({ cards: [makeCard({ background: '#0a7f5c' })] });
+    const text = serializeSession(session);
+    expect(item((JSON.parse(text) as Session).cards, 0).background).toBe('#0a7f5c');
+    expect(parseSession(text)).toEqual(session);
+    expect(serializeSession(parseSession(text))).toBe(text);
+  });
+
+  it('makes a background colour lowercase, on load and on save', () => {
+    const upper = tamper(serializeSession(makeSession()), (r) => {
+      item(r.cards, 0).background = '#0A7F5C';
+    });
+    expect(parseSession(upper).cards[0]?.background).toBe('#0a7f5c');
+    const session = makeSession({ cards: [makeCard({ background: '#0A7F5C' })] });
+    expect(item((JSON.parse(serializeSession(session)) as Session).cards, 0).background).toBe(
+      '#0a7f5c',
+    );
+  });
+
+  it.each([
+    ['no "#"', '0a7f5c'],
+    ['three digits', '#0af'],
+    ['eight digits', '#0a7f5cff'],
+    ['a colour name', 'white'],
+    ['another colour name', 'transparent'],
+    ['a letter that is not a hex digit', '#0a7f5z'],
+    ['an empty text', ''],
+    ['a number', 688988],
+    ['true', true],
+    ['null', null],
+    ['a list', ['#0a7f5c']],
+    ['an object', { r: 10, g: 127, b: 92 }],
+  ])('drops a background colour that is %s, so the card is white', (_name, value) => {
+    // On load: the rest of the file still loads, and the card simply has no colour.
+    const text = tamper(serializeSession(makeSession()), (r) => {
+      item(r.cards, 0).background = value;
+    });
+    const loaded = parseSession(text);
+    expect(Object.hasOwn(item(loaded.cards, 0), 'background')).toBe(false);
+    expect(loaded).toEqual(makeSession());
+    // On save: a bad value on the card in memory never reaches the file.
+    const session = makeSession({
+      cards: [makeCard({ background: value as unknown as string })],
+    });
+    const raw = JSON.parse(serializeSession(session)) as Session;
+    expect(Object.hasOwn(item(raw.cards, 0), 'background')).toBe(false);
+  });
+
+  it('writes no background colour for a card that has none', () => {
+    // The fixture session is like one the app has just made: no card has a colour.
+    const session = makeSession();
+    const text = serializeSession(session);
+    expect(text).not.toContain('background');
+    const loaded = parseSession(text);
+    expect(loaded).toEqual(session);
+    for (const card of loaded.cards) expect(Object.hasOwn(card, 'background')).toBe(false);
+    // Nor for a card whose colour is set to undefined rather than left out.
+    const explicit = makeSession({ cards: [makeCard({ background: undefined })] });
+    expect(serializeSession(explicit)).not.toContain('background');
+  });
+
+  it('round-trips a card with a colour and a crop with padding beside cards with neither', () => {
+    const session = makeSession({ cards: [makeColouredCard(), ...makeSession().cards.slice(1)] });
+    const text = serializeSession(session);
+    const raw = JSON.parse(text) as Session;
+    expect(item(raw.cards, 0).background).toBe(CARD_COLOUR);
+    expect(Object.hasOwn(item(raw.cards, 1), 'background')).toBe(false);
+    expect(parseSession(text)).toEqual(session);
+    expect((parseSession(text).cards[0]?.edit as ImageEdit).crop).toEqual(PADDED_CROP);
+  });
+
+  it('loads an older file, whose cards have no background colour, exactly as before', () => {
+    const session = makeSession();
+    // The text of a file written before cards could have a background colour.
+    const older = JSON.stringify(session);
+    expect(older).not.toContain('background');
+    const loaded = parseSession(older);
+    expect(loaded).toEqual(session);
+    for (const card of loaded.cards) expect(Object.hasOwn(card, 'background')).toBe(false);
+    // Saving it again writes the same file the serializer always wrote for it, at version 1.
+    const saved = serializeSession(loaded);
+    expect(saved).toBe(serializeSession(session));
+    expect(saved).not.toContain('background');
+    expect(loaded.version).toBe(1);
+  });
+
+  it('keeps a crop with padding exactly, number for number, through save and load', () => {
+    // The fit frame of a 4000 x 3000 photo for a square, and one for a tall placement.
+    const crops = [
+      { x: 0, y: -1 / 6, width: 1, height: 4 / 3 },
+      { x: 0.05, y: -0.1, width: 0.9, height: 1.2 },
+      { x: -0.3888888888888889, y: 0, width: 1.7777777777777777, height: 1 },
+    ];
+    for (const crop of crops) {
+      const session = makeSession({ cards: [makeCard({ edit: makeImageEdit({ crop }) })] });
+      const loaded = parseSession(serializeSession(session));
+      expect((loaded.cards[0]?.edit as ImageEdit).crop).toEqual(crop);
+      expect(serializeSession(loaded)).toBe(serializeSession(session));
+    }
+  });
+
+  it('does not check a crop against the crop limits: that happens where it is used', () => {
+    // Far larger than any fit size, and off to one side. It is kept as four numbers.
+    const crop = { x: -3, y: 2.5, width: 9, height: 0.001 };
+    const session = makeSession({ cards: [makeCard({ edit: makeImageEdit({ crop }) })] });
+    expect((parseSession(serializeSession(session)).cards[0]?.edit as ImageEdit).crop).toEqual(
+      crop,
+    );
+  });
+
+  it('still rejects a crop that is not four finite numbers', () => {
+    const text = tamper(serializeSession(makeSession()), (r) => {
+      (item(r.cards, 0).edit as { crop: unknown }).crop = { x: 0, y: 0, width: '1', height: 1 };
+    });
+    expect(() => parseSession(text)).toThrow(
+      'session.cards[0].edit.crop.width must be a finite number',
+    );
   });
 
   it('refuses to write a session whose shape is wrong', () => {

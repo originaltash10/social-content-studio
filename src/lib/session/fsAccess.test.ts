@@ -10,9 +10,17 @@ import {
 import { emptyBrand } from './layout';
 import type { SessionFiles } from './layout';
 import { SessionFormatError, serializeBrand, serializeSession } from './serialize';
-import { hash, makeAsset, makeBrand, makeSession } from '../../test/fixtures';
+import {
+  CARD_COLOUR,
+  PADDED_CROP,
+  hash,
+  makeAsset,
+  makeBrand,
+  makeColouredCard,
+  makeSession,
+} from '../../test/fixtures';
 import { MockDir, domError } from '../../test/mockFs';
-import type { Session } from '../../types';
+import type { ImageEdit, Session } from '../../types';
 
 const A = hash('a');
 const B = hash('b');
@@ -201,6 +209,27 @@ describe('loadFromFolder', () => {
     expect([...loaded.blobs.keys()].sort()).toEqual([A, B]);
     expect(await loaded.blobs.get(A)?.text()).toBe('photo bytes');
     expect(await loaded.blobs.get(B)?.text()).toBe('video bytes!');
+  });
+
+  it('writes no background colour for cards that have none, and reads them back with none', async () => {
+    // The fixture session is like one the app has just made: no card has a colour.
+    const dir = await savedFolder();
+    expect(await dir.text('session.json')).not.toContain('background');
+    const loaded = await loadFromFolder(dir.handle);
+    expect(loaded.session).toEqual(makeSession());
+    for (const card of loaded.session.cards) expect(Object.hasOwn(card, 'background')).toBe(false);
+  });
+
+  it('reads back a background colour and a crop with padding as they were saved', async () => {
+    const session = makeSession({ cards: [makeColouredCard(), ...makeSession().cards.slice(1)] });
+    const dir = await savedFolder(files({ session }));
+    expect(await dir.text('session.json')).toContain(`"background": "${CARD_COLOUR}"`);
+    const loaded = await loadFromFolder(dir.handle);
+    expect(loaded.session).toEqual(session);
+    expect(loaded.session.cards[0]?.background).toBe(CARD_COLOUR);
+    expect((loaded.session.cards[0]?.edit as ImageEdit).crop).toEqual(PADDED_CROP);
+    // The cards beside it still have no colour.
+    expect(Object.hasOwn(loaded.session.cards[1] as object, 'background')).toBe(false);
   });
 
   it('still loads when an asset file is missing, and reports which one', async () => {

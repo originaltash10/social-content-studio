@@ -6,14 +6,17 @@ import type { SessionFiles } from './layout';
 import { SessionFormatError, serializeBrand, serializeSession } from './serialize';
 import { BundleError, buildBundle, bundleFileName, readBundle } from './zip';
 import {
+  CARD_COLOUR,
   KEY_FIELDS,
+  PADDED_CROP,
   SECRET,
   hash,
   makeBrand,
+  makeColouredCard,
   makeSession,
   withInjectedKeys,
 } from '../../test/fixtures';
-import type { Session } from '../../types';
+import type { ImageEdit, Session } from '../../types';
 
 const A = hash('a');
 const B = hash('b');
@@ -104,6 +107,29 @@ describe('round trip', () => {
     expect(await loaded.blobs.get(A)?.text()).toBe('photo bytes');
     const bytes = await loaded.blobs.get(B)?.arrayBuffer();
     expect([...new Uint8Array(bytes ?? new ArrayBuffer(0))]).toEqual([0, 255, 1, 254, 2, 253]);
+  });
+
+  it('writes no background colour for cards that have none, and reads them back with none', async () => {
+    // The fixture session is like one the app has just made: no card has a colour.
+    const bundle = await buildBundle(files());
+    const text = await (await open(bundle)).file('session.json')?.async('string');
+    expect(text).not.toContain('background');
+    const loaded = await readBundle(bundle);
+    expect(loaded.session).toEqual(makeSession());
+    for (const card of loaded.session.cards) expect(Object.hasOwn(card, 'background')).toBe(false);
+  });
+
+  it('reads back a background colour and a crop with padding as they were bundled', async () => {
+    const session = makeSession({ cards: [makeColouredCard(), ...makeSession().cards.slice(1)] });
+    const bundle = await buildBundle(files({ session }));
+    const text = await (await open(bundle)).file('session.json')?.async('string');
+    expect(text).toContain(`"background": "${CARD_COLOUR}"`);
+    const loaded = await readBundle(bundle);
+    expect(loaded.session).toEqual(session);
+    expect(loaded.session.cards[0]?.background).toBe(CARD_COLOUR);
+    expect((loaded.session.cards[0]?.edit as ImageEdit).crop).toEqual(PADDED_CROP);
+    // The cards beside it still have no colour.
+    expect(Object.hasOwn(loaded.session.cards[1] as object, 'background')).toBe(false);
   });
 
   it('round-trips a second time without change', async () => {

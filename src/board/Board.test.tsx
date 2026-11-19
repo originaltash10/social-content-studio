@@ -13,7 +13,11 @@ import { useSessionStore } from '../store/sessionStore';
 import { fakeRenderClient, resultFor } from '../test/fakeRenderClient';
 import type { FakeRenderClient } from '../test/fakeRenderClient';
 import { hash, makeAsset } from '../test/fixtures';
-import type { PlacementSpec } from '../types';
+import type { ImageEdit, PlacementSpec, Rect, Session } from '../types';
+import { draftCard } from '../lib/board/cards';
+import { fitWholeCrop } from '../lib/editor/geometry';
+import { cropToPixels } from '../lib/render/crop';
+import { emptyBrand } from '../lib/session/layout';
 import { LOADING_TEXT } from '../editor/Editor';
 import { SourcePhotoError } from '../lib/editor/sourcePhoto';
 import type { DisplayPhoto, SourcePhotoInput } from '../lib/editor/sourcePhoto';
@@ -934,6 +938,96 @@ describe('the details dialog', () => {
     expect(store().undoStack).toHaveLength(before.undoSteps);
     expect(store().revision).toBe(before.revision);
     expect(store().dirty).toBe(false);
+  });
+
+  it('shows and renders a saved crop that breaks the crop limits corrected, without writing it back', async () => {
+    const source = { width: PHOTO.width, height: PHOTO.height };
+    const square = spec('linkedin', 'image-square');
+    // Two saved crops no editor would make. The first is far larger than the fit size and off
+    // to one side. The second is taller than the photo but placed so the photo sticks out of it.
+    const tooLarge: Rect = { x: -3, y: 2.5, width: 9, height: 9 };
+    const notHolding: Rect = { x: 0.05, y: 0.3, width: 0.78, height: 1.04 };
+    const saved = (placement: PlacementSpec, id: string, crop: Rect) => {
+      const draft = draftCard(PHOTO, placement);
+      return { ...draft, id, version: 1, edit: { ...(draft.edit as ImageEdit), crop } };
+    };
+    const session: Session = {
+      version: 1,
+      id: 'saved-session',
+      name: 'Saved',
+      createdAt: '2026-11-16T09:00:00.000Z',
+      updatedAt: '2026-11-16T09:00:00.000Z',
+      brief: { topic: '', audience: '', cta: '', tone: 'neutral' },
+      assets: [PHOTO],
+      cards: [saved(FEED, 'feed', tooLarge), saved(square, 'square', notHolding)],
+      groups: [],
+    };
+    act(() => {
+      store().loadSession({
+        session,
+        brand: emptyBrand(),
+        blobs: new Map([[PHOTO.id, new Blob([JPEG])]]),
+        missingAssetIds: [],
+        brandMissing: false,
+      });
+    });
+    expect(store().dirty).toBe(false);
+    renderBoard();
+    await sent(2);
+
+    // Rendered: the first as the fit frame, the second slid down until it holds the photo.
+    const frame = fitWholeCrop(source, sizeOf(FEED));
+    const feedPlan = client.calls[0]?.job.plan;
+    expect(feedPlan?.crop).toEqual(cropToPixels(frame, source));
+    expect(feedPlan?.cropRect.width).toBeCloseTo(frame.width, 10);
+    expect(feedPlan?.cropRect.y).toBeCloseTo(frame.y, 10);
+    const squarePlan = client.calls[1]?.job.plan;
+    expect(squarePlan?.cropRect.y).toBe(0);
+    expect(squarePlan?.cropRect.x).toBeCloseTo(0.05, 10);
+    expect(squarePlan?.cropRect.height).toBeCloseTo(1.04, 10);
+    answer(0);
+    answer(1);
+    await idle();
+
+    const before = {
+      session: store().session,
+      feed: store().session?.cards[0],
+      square: store().session?.cards[1],
+      revision: store().revision,
+    };
+    // Rendering wrote nothing: the crops are the saved numbers, and nothing needs saving.
+    expect((before.feed?.edit as ImageEdit).crop).toEqual(tooLarge);
+    expect((before.square?.edit as ImageEdit).crop).toEqual(notHolding);
+    expect(store().dirty).toBe(false);
+    expect(store().undoStack).toEqual([]);
+
+    // Displayed: the editor shows the corrected crop, in fractions of the photo.
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    await showPhoto();
+    const shown = within(dialog).getByTestId('crop-rect').style;
+    expect(Number.parseFloat(shown.left)).toBeCloseTo(frame.x * 100, 3);
+    expect(Number.parseFloat(shown.top)).toBeCloseTo(frame.y * 100, 3);
+    expect(Number.parseFloat(shown.width)).toBeCloseTo(frame.width * 100, 3);
+    expect(Number.parseFloat(shown.height)).toBeCloseTo(frame.height * 100, 3);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    fireEvent.click(button('Open LinkedIn Image post square for site.jpg, v1'));
+    await showPhoto();
+    const second = within(screen.getByRole('dialog')).getByTestId('crop-rect').style;
+    expect(Number.parseFloat(second.top)).toBeCloseTo(0, 3);
+    expect(Number.parseFloat(second.height)).toBeCloseTo(104, 3);
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Close' }));
+    await idle();
+
+    // The very same objects: opening wrote nothing, not even an equal value.
+    expect(store().session).toBe(before.session);
+    expect(store().session?.cards[0]).toBe(before.feed);
+    expect(store().session?.cards[1]).toBe(before.square);
+    expect(store().undoStack).toEqual([]);
+    expect(store().revision).toBe(before.revision);
+    expect(store().dirty).toBe(false);
+    // No further render was asked for either.
+    expect(client.calls).toHaveLength(2);
   });
 
   it('renders the card again as PNG when PNG is chosen, and as JPG at the new quality', async () => {

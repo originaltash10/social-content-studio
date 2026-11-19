@@ -12,6 +12,7 @@
  * Pure: no DOM, no store access.
  */
 
+import { parseBackground } from '../render/background';
 import type { BrandKit, Card, Session } from '../../types';
 
 export const SESSION_FILE = 'session.json';
@@ -123,6 +124,12 @@ const carouselEdit = object({
   coverIndex: number,
 });
 
+/**
+ * A card's background colour. Unlike the other readers this one never fails: only a "#" and six
+ * hex digits is kept, in lowercase, and anything else is dropped, which leaves the card white.
+ */
+const background: Reader<string | undefined> = (value) => parseBackground(value);
+
 /** The three edit types carry no tag; tell them apart by a field only one of them has. */
 const edit: Reader<Card['edit']> = (value, path) => {
   if (isRecord(value) && 'slides' in value) return carouselEdit(value, path);
@@ -137,6 +144,7 @@ const card = object({
   placement: string,
   parentId: optional(string),
   focal: optional(object({ x: unit, y: unit })),
+  background,
   version: number,
   status: oneOf('draft', 'review', 'approved'),
   edit,

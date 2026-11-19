@@ -7,8 +7,8 @@
  * - Assets are immutable once imported: the file and what was read from it never change, and
  *   importing an id that is already present leaves the existing asset untouched. The one thing
  *   that can be set afterwards is the focal point (`setAssetFocal`).
- * - "Duplicating a card copies edit and copy, sets parentId, and increments version." The copy
- *   also gets its own focal point, so moving it later changes that card only.
+ * - "Duplicating a card copies edit, copy and background, sets parentId, and increments
+ *   version." The copy also gets its own focal point, so moving it later changes that card only.
  * - "every store mutation pushes a snapshot of the affected card ... Fifty levels is enough."
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
  * - A card's validation result is the validator's output, not an edit, so recording it is not
@@ -85,9 +85,10 @@ type SessionActions = {
   setAssetFocal: (assetId: string, focal: Asset['focal'], crops?: CardCrop[]) => boolean;
   /**
    * Duplicates a card as a linked variant and returns the new id, or null if not found. The
-   * copy gets its own focal point: the source card's own, or else its photo's. The source is
-   * not changed. Only a source with no own point and no single photo in the session gives a
-   * copy without one.
+   * copy gets its own focal point: the source card's own, or else its photo's. It keeps the
+   * source's background colour, if the source has one. The source is not changed. Only a
+   * source with no own point and no single photo in the session gives a copy without a focal
+   * point.
    */
   duplicateCard: (id: string) => string | null;
   /** Reverts the most recent card change. Returns false when there is nothing to undo. */
@@ -307,6 +308,7 @@ export const useSessionStore = create<SessionState>()(
           comments: [],
         };
         if (focal) copy.focal = { x: focal.x, y: focal.y };
+        if (source.background !== undefined) copy.background = source.background;
         mutate((open, state) => {
           const at = open.cards.findIndex((c) => c.id === id);
           open.cards.splice(at + 1, 0, copy);

@@ -58,6 +58,27 @@ export function makeCard(overrides: Partial<Card> = {}): Card {
   };
 }
 
+/**
+ * A crop with padding: the whole of a 4000 x 3000 photo in a square, with a sixth of the
+ * photo's height above it and below it.
+ */
+export const PADDED_CROP = { x: 0, y: -1 / 6, width: 1, height: 4 / 3 };
+
+/** The colour of the card `makeColouredCard` makes. */
+export const CARD_COLOUR = '#0a7f5c';
+
+/**
+ * A card with a background colour and a crop with padding. `makeCard` has neither, like a card
+ * the app has just created, so a test that needs them asks for this card instead.
+ */
+export function makeColouredCard(overrides: Partial<Card> = {}): Card {
+  return makeCard({
+    background: CARD_COLOUR,
+    edit: makeImageEdit({ crop: { ...PADDED_CROP } }),
+    ...overrides,
+  });
+}
+
 /** A session that uses every field of the data model, optional ones included. */
 export function makeSession(overrides: Partial<Session> = {}): Session {
   return {
