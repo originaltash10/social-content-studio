@@ -159,11 +159,17 @@ export function CardDetails({
             <section aria-label="Rendered file" className="flex flex-col gap-2">
               <h3 className="font-heading font-semibold">Rendered file</h3>
               {done ? (
-                <img
-                  src={done.url}
-                  alt={previewAlt(card, fileName, name)}
-                  className="max-h-48 self-start rounded-control bg-page object-contain"
-                />
+                // The file's type and size under it, so a change of file type or quality shows.
+                <figure className="flex flex-col gap-1 self-start">
+                  <img
+                    src={done.url}
+                    alt={previewAlt(card, fileName, name)}
+                    className="max-h-48 self-start rounded-control bg-page object-contain"
+                  />
+                  <figcaption className="text-label text-muted-text">
+                    {renderedFileLabel(done)}
+                  </figcaption>
+                </figure>
               ) : isPending(render) ? (
                 <div className="flex flex-col gap-1">
                   <div

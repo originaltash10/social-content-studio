@@ -609,11 +609,17 @@ describe('the details dialog', () => {
     const first = within(file()).getByRole('img');
     expect(first).toHaveAttribute('src', 'blob:render-1');
     expect(first).toHaveAttribute('alt', 'Preview of site.jpg for Instagram Feed vertical');
+    // Under it, the file's size, type and file size, as in the File row.
+    expect(within(file()).getByRole('figure')).toHaveTextContent(
+      `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 400 KB`,
+    );
 
     // A change in the editor starts a new render: progress shows until its file is ready.
     fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
     await sent(2);
     expect(within(file()).queryByRole('img')).toBeNull();
+    // No caption without a file: the progress shows instead.
+    expect(within(file()).queryByRole('figure')).toBeNull();
     expect(file()).toHaveTextContent('Waiting to render');
     act(() => client.calls[1]?.onProgress('drawing'));
     const bar = within(file()).getByRole('progressbar', {
@@ -621,9 +627,12 @@ describe('the details dialog', () => {
     });
     expect(bar).toHaveAttribute('aria-valuenow', '60');
     expect(bar).toHaveAttribute('aria-valuetext', 'Cropping and resizing');
-    answer(1);
+    answer(1, { bytes: 1_234_567 });
     await idle();
     expect(within(file()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(within(file()).getByRole('figure')).toHaveTextContent(
+      `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 1.2 MB`,
+    );
     expect(within(file()).queryByRole('progressbar')).toBeNull();
 
     // Cancelled, then failed: no picture, and it says why.
@@ -817,9 +826,12 @@ describe('the details dialog', () => {
   it('renders the card again as PNG when PNG is chosen, and as JPG at the new quality', async () => {
     const { dialog } = await openDetails();
     await showPhoto();
-    const fileRow = () => within(dialog).getByText(/^\d+ × \d+ (JPG|PNG) · /);
+    const fileRow = () => within(dialog).getByText(/^\d+ × \d+ (JPG|PNG) · /, { selector: 'dd' });
+    const caption = () =>
+      within(within(dialog).getByRole('region', { name: 'Rendered file' })).getByRole('figure');
     const { width, height } = sizeOf(FEED);
     expect(fileRow()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+    expect(caption()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
     expect(store().dirty).toBe(true);
     act(() => store().markSaved(store().revision));
 
@@ -837,9 +849,9 @@ describe('the details dialog', () => {
     });
     await idle();
     expect(fileRow()).toHaveTextContent(`${width} × ${height} PNG · 1.2 MB`);
-    expect(within(dialog).getByRole('region', { name: 'Rendered file' })).toContainElement(
-      within(dialog).getAllByRole('img').at(-1) as HTMLElement,
-    );
+    // The caption under the preview follows the new file.
+    expect(caption()).toHaveTextContent(`${width} × ${height} PNG · 1.2 MB`);
+    expect(within(caption()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
     expect(article(/v1/)).toHaveTextContent('Warning');
 
     // Back to JPG, then the quality: each is a new file at the placement's size.
