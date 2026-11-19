@@ -425,6 +425,96 @@ describe('progress, cancel and failures', () => {
     expect(note).not.toHaveClass('text-highlight-text');
   });
 
+  it('keeps a tile the same height while its card is rendered again', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0, { upscaled: true });
+    await idle();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    const tile = () => article(label);
+    // jsdom has no layout, so the height is stood for by the tile's rows: the same elements in
+    // the same places, each with text. The browser check measures the real height.
+    const rows = () =>
+      [...tile().children].map((row) => `${row.tagName}${row.className}:${row.textContent !== ''}`);
+    const before = rows();
+    const picture = within(tile()).getByRole('img');
+    const { width, height } = sizeOf(FEED);
+    expect(tile()).toHaveTextContent(`${width} × ${height} JPG · 400 KB`);
+
+    // Cancel and Render again take turns in one place, each as wide as the wider of the two,
+    // so the row of buttons wraps the same way whichever is shown.
+    const twin = (name: string) => within(button(`${name} ${label}`)).getByTestId('same-width');
+    expect(twin('Render again')).toHaveTextContent('Cancel');
+    expect(twin('Render again')).toHaveAttribute('aria-hidden', 'true');
+    expect(twin('Render again')).toHaveClass('invisible');
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(2);
+    expect(twin('Cancel')).toHaveTextContent('Render again');
+    expect(twin('Cancel')).toHaveClass('invisible');
+    act(() => client.calls[1]?.onProgress('encoding'));
+    // The same picture, dimmed, with the progress over it; "Updating…" in the file's line.
+    expect(within(tile()).getByRole('img')).toBe(picture);
+    expect(picture).toHaveAttribute('src', 'blob:render-1');
+    expect(picture).toHaveAttribute('data-updating', 'true');
+    const bar = within(tile()).getByRole('progressbar', { name: `Rendering ${label}` });
+    expect(bar.parentElement).toBe(picture.parentElement);
+    expect(within(tile()).getByText('Updating…')).toHaveClass('text-label');
+    // The enlarged note and the reason stay until the new result arrives.
+    expect(tile()).toHaveTextContent('Note: enlarged to fit.');
+    expect(within(tile()).getByText('Alt text is missing')).toBeInTheDocument();
+    expect(within(tile()).getByText('Not checked yet')).toBeInTheDocument();
+    expect(rows()).toEqual(before);
+
+    answer(1, { upscaled: true, bytes: 1_234_567 });
+    await idle();
+    expect(within(tile()).getByRole('img')).toBe(picture);
+    expect(picture).toHaveAttribute('src', 'blob:render-2');
+    expect(picture).not.toHaveAttribute('data-updating');
+    expect(tile()).toHaveTextContent(`${width} × ${height} JPG · 1.2 MB`);
+    expect(within(tile()).queryByRole('progressbar')).toBeNull();
+    expect(rows()).toEqual(before);
+  });
+
+  it("shows a placeholder with the progress over it before a tile's first file", async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    act(() => client.calls[0]?.onProgress('decoding'));
+    const tile = article(/Feed vertical/);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    const bar = within(tile).getByRole('progressbar');
+    expect(bar.parentElement).toHaveTextContent('Preview coming');
+    expect(bar.parentElement?.style.aspectRatio).toBe(
+      `${sizeOf(FEED).width} / ${sizeOf(FEED).height}`,
+    );
+    expect(within(tile).getByText('Opening the photo')).toBeInTheDocument();
+  });
+
+  it('starts from the placeholder again after a cancel, as the old file is gone', async () => {
+    openSession(PHOTO);
+    renderBoard();
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(2);
+    fireEvent.click(button(`Cancel ${label}`));
+    const tile = article(label);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    expect(tile).toHaveTextContent('Cancelled before the file was made.');
+    expect(within(tile).queryByText('Alt text is missing')).toBeNull();
+    fireEvent.click(button(`Render again ${label}`));
+    await sent(3);
+    expect(within(tile).queryByRole('img')).toBeNull();
+    expect(tile).toHaveTextContent('Preview coming');
+    expect(tile).toHaveTextContent('Waiting to render');
+  });
+
   it('shows the first reason for a result on the card, and how many more there are', async () => {
     openSession(PHOTO);
     renderBoard();
@@ -631,13 +721,15 @@ describe('the details dialog', () => {
       `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 400 KB`,
     );
 
-    // A change in the editor starts a new render: progress shows until its file is ready.
+    // A change in the editor starts a new render. The same picture stays, marked as updating,
+    // with the progress over it, until the new file is ready.
     fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
     await sent(2);
-    expect(within(file()).queryByRole('img')).toBeNull();
-    // No caption without a file: the progress shows instead.
-    expect(within(file()).queryByRole('figure')).toBeNull();
-    expect(file()).toHaveTextContent('Waiting to render');
+    expect(within(file()).getByRole('img')).toBe(first);
+    expect(first).toHaveAttribute('src', 'blob:render-1');
+    expect(first).toHaveAttribute('data-updating', 'true');
+    expect(within(file()).getByRole('figure')).toHaveTextContent('Updating…');
+    expect(file()).toHaveAttribute('aria-busy', 'true');
     act(() => client.calls[1]?.onProgress('drawing'));
     const bar = within(file()).getByRole('progressbar', {
       name: 'Rendering Instagram Feed vertical',
@@ -646,7 +738,10 @@ describe('the details dialog', () => {
     expect(bar).toHaveAttribute('aria-valuetext', 'Cropping and resizing');
     answer(1, { bytes: 1_234_567 });
     await idle();
-    expect(within(file()).getByRole('img')).toHaveAttribute('src', 'blob:render-2');
+    expect(within(file()).getByRole('img')).toBe(first);
+    expect(first).toHaveAttribute('src', 'blob:render-2');
+    expect(first).not.toHaveAttribute('data-updating');
+    expect(file()).toHaveAttribute('aria-busy', 'false');
     expect(within(file()).getByRole('figure')).toHaveTextContent(
       `${sizeOf(FEED).width} × ${sizeOf(FEED).height} JPG · 1.2 MB`,
     );
@@ -663,8 +758,9 @@ describe('the details dialog', () => {
     await sent(4);
     act(() => client.calls[3]?.reject(new RenderError('encode', 'Could not be saved as JPG.')));
     await idle();
-    expect(file()).toHaveTextContent('No preview yet.');
-    expect(dialog).toHaveTextContent('Could not be saved as JPG.');
+    // The failure is said in the file's place, once.
+    expect(file()).toHaveTextContent('Could not be saved as JPG.');
+    expect(within(dialog).getAllByText('Could not be saved as JPG.')).toHaveLength(1);
   });
 
   it('shows why a photo cannot be edited in place of the crop area, and keeps the details', async () => {

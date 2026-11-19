@@ -46,6 +46,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { controlWorkers } from './workerHold.mjs';
+
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(import.meta.url);
 const BASE = '/social-content-studio/';
@@ -120,32 +122,6 @@ function stopServers() {
 }
 
 // --------------------------------------------------------------------------- in the page
-
-/**
- * Runs in the page before the app. Render jobs sent to a worker can be held back on request:
- * `__hold = 'board'` holds the board's jobs, `__hold = 'export'` holds the export's jobs (their
- * ids start with "export-"). `__release()` sends everything held.
- */
-function controlWorkers() {
-  window.__hold = null;
-  window.__held = [];
-  const post = Worker.prototype.postMessage;
-  Worker.prototype.postMessage = function postMessage(message, ...rest) {
-    const id = message && message.type === 'render' ? message.job.id : null;
-    const isExport = typeof id === 'string' && id.startsWith('export-');
-    if (id !== null && window.__hold !== null && (window.__hold === 'export') === isExport) {
-      window.__held.push(() => post.call(this, message, ...rest));
-      return undefined;
-    }
-    return post.call(this, message, ...rest);
-  };
-  window.__release = () => {
-    window.__hold = null;
-    const held = window.__held.splice(0);
-    for (const send of held) send();
-    return held.length;
-  };
-}
 
 /**
  * Runs in the page before the app. The folder picker returns a browser-private (OPFS) folder,
