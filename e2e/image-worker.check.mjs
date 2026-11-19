@@ -4,13 +4,29 @@
  * build served under a subpath, and checks that importing still works in the built site.
  *
  *   node e2e/image-worker.check.mjs [--out <folder for the report and sample images>]
+ *                                   [--compare-with <git commit, branch or tag>]
+ *
+ * With --compare-with, it also shows whether this version of the app and another one make the
+ * same files. The other version's source is exported from git into a scratch folder (nothing in
+ * the repository changes), given this version's check page, and served; both then render the
+ * same ordinary cards (no colour, crop inside the photo), and every output file is compared
+ * byte for byte by its checksum. Without the option that step is skipped.
  *
  * It needs Playwright with Chromium to be installed on the machine already; it is not a
  * dependency of this project yet, so this is not part of `npm test` or the deploy workflow.
  * Nothing it produces is written inside the repository except the normal `dist` build.
  */
 import { execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import {
+  cpSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -18,7 +34,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASE = '/social-content-studio/';
-const PORTS = { dev: 5191, site: 5192, harness: 5193 };
+const PORTS = { dev: 5191, site: 5192, harness: 5193, compare: 5187 };
+const compareFlag = process.argv.indexOf('--compare-with');
+const compareWith = compareFlag > -1 ? process.argv[compareFlag + 1] : null;
 const outFlag = process.argv.indexOf('--out');
 const outDir = resolve(
   outFlag > -1 ? process.argv[outFlag + 1] : join(tmpdir(), 'image-worker-check'),
@@ -35,9 +53,9 @@ try {
 }
 
 const servers = [];
-function serve(args, env, url) {
+function serve(args, env, url, cwd = root) {
   const child = spawn('npx', ['vite', ...args], {
-    cwd: root,
+    cwd,
     env: { ...process.env, ...env },
     stdio: 'ignore',
     detached: true,
@@ -57,13 +75,74 @@ async function waitFor(url) {
   throw new Error(`server did not start at ${url}`);
 }
 function stopServers() {
-  for (const child of servers) {
+  for (const child of servers.splice(0)) {
     try {
       process.kill(-child.pid);
     } catch {
       // already gone
     }
   }
+}
+
+/** Renders the comparison cards on a check page and returns each file's size and checksum. */
+async function comparisonFiles(browser, url) {
+  const { context, page, problems } = await openPage(browser, url);
+  await page.waitForFunction(() => typeof window.renderForComparison === 'function');
+  const files = await page.evaluate(() => window.renderForComparison());
+  await context.close();
+  if (problems.length) throw new Error(`comparison page: ${problems.join(' | ')}`);
+  return files;
+}
+
+/**
+ * The comparison files as another version of the app makes them. That version's source is
+ * exported from git into a scratch folder, with this version's check page put in place of its
+ * own so both run the same cards, and served on its own, before this version's servers
+ * are started.
+ */
+async function filesFromOtherVersion(browser, ref) {
+  const tree = join(outDir, 'compare-tree');
+  rmSync(tree, { recursive: true, force: true });
+  mkdirSync(tree, { recursive: true });
+  const commit = execFileSync('git', ['rev-parse', '--verify', `${ref}^{commit}`], {
+    cwd: root,
+    encoding: 'utf8',
+  }).trim();
+  execFileSync('sh', ['-c', `git archive ${commit} | tar -x -C "${tree}"`], { cwd: root });
+  // The installed packages are linked one by one into a folder of the other version's own, so
+  // the dev server's prepared-dependency cache (node_modules/.vite) is not shared with this
+  // version's. Sharing it makes this version's dev server prepare its dependencies again later,
+  // which reloads the page in the middle of whichever check runs next.
+  mkdirSync(join(tree, 'node_modules'));
+  for (const entry of readdirSync(join(root, 'node_modules'))) {
+    if (entry === '.vite' || entry === '.tmp') continue;
+    symlinkSync(join(root, 'node_modules', entry), join(tree, 'node_modules', entry));
+  }
+  cpSync(join(root, 'e2e/worker-check'), join(tree, 'e2e/worker-check'), { recursive: true });
+  const url = `http://localhost:${PORTS.compare}/`;
+  await serve(['--port', String(PORTS.compare), '--strictPort'], {}, url, tree);
+  try {
+    return { commit, files: await comparisonFiles(browser, `${url}e2e/worker-check/index.html`) };
+  } finally {
+    stopServers();
+  }
+}
+
+function printComparison(ref, other, mine) {
+  console.log(`\n== Output files compared with ${ref} (${other.commit.slice(0, 7)})`);
+  const names = [...new Set([...Object.keys(other.files), ...Object.keys(mine)])];
+  const different = names.filter((name) => other.files[name] !== mine[name]);
+  for (const name of different) {
+    console.log(`  DIFFERENT  ${name}`);
+    console.log(`          ${ref}: ${other.files[name] ?? 'not made'}`);
+    console.log(`          this version: ${mine[name] ?? 'not made'}`);
+  }
+  const ok = different.length === 0 && names.length > 0;
+  console.log(
+    `  ${ok ? 'PASS' : 'FAIL'}  ${names.length - different.length} of ${names.length} files are ` +
+      'identical, byte for byte',
+  );
+  return ok;
 }
 
 function listFiles(dir, base = dir) {
@@ -188,11 +267,16 @@ let failed = false;
 const browser = await chromium.launch();
 try {
   console.log(`Chromium ${browser.version()}; report and sample images in ${outDir}`);
+  const other = compareWith ? await filesFromOtherVersion(browser, compareWith) : null;
 
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, `http://localhost:${PORTS.dev}/`);
   const devUrl = `http://localhost:${PORTS.dev}/`;
   failed =
     !(await runHarness(browser, 'dev', `${devUrl}e2e/worker-check/index.html`, devUrl)) || failed;
+  if (other) {
+    const mine = await comparisonFiles(browser, `${devUrl}e2e/worker-check/index.html`);
+    failed = !printComparison(compareWith, other, mine) || failed;
+  }
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   const buildEnv = { ...process.env, BASE_PATH: BASE };
