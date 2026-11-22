@@ -3,6 +3,8 @@
  * the test gives, and the frame's place on screen is set by the test, because jsdom lays
  * nothing out. Real pointers, layout and touch are checked in Chromium.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SessionPanel } from '../app/SessionPanel';
@@ -16,7 +18,7 @@ import { getPlacement } from '../lib/platforms';
 import { useSessionStore } from '../store/sessionStore';
 import { hash, makeAsset } from '../test/fixtures';
 import type { Card, ImageEdit, PlacementSpec, Rect, Size } from '../types';
-import { HANDLE_TARGET } from './CropStage';
+import { HANDLE_TARGET, HANDLE_TARGET_MIN, cornerTargetSize } from './cornerTarget';
 import { Editor, FIT_LABEL, HELP_TEXT, LOADING_TEXT } from './Editor';
 import { cropReadout, focalKindText, focalLabel, focalReadout, stageLabel } from './text';
 
@@ -278,10 +280,8 @@ describe('the crop area', () => {
 
   it('is the same size and in the same place whatever the crop is', async () => {
     await openEditor();
-    const layout = () => [
-      area().getAttribute('style'),
-      screen.getByTestId('crop-frame').getAttribute('style'),
-    ];
+    const place = ({ style }: HTMLElement) => [style.left, style.top, style.width, style.height];
+    const layout = () => [area().getAttribute('style'), ...place(screen.getByTestId('crop-frame'))];
     const before = layout();
     fireEvent.click(screen.getByRole('button', { name: FIT_LABEL }));
     expect(layout()).toEqual(before);
@@ -297,19 +297,88 @@ describe('the crop area', () => {
     expect(layout()).toEqual(before);
   });
 
-  it('gives every corner a touch target of at least 44 pixels', async () => {
+  it('gives every corner a touch target centred on the corner, sized from the crop', async () => {
     await openEditor();
-    expect(HANDLE_TARGET).toBeGreaterThanOrEqual(44);
     for (const corner of ['nw', 'ne', 'sw', 'se']) {
-      expect(handle(corner).style.width).toBe(`${HANDLE_TARGET}px`);
-      expect(handle(corner).style.height).toBe(`${HANDLE_TARGET}px`);
+      // The size and the centring are the `.crop-handle` rule in src/index.css.
+      expect(handle(corner).className).toContain('crop-handle');
       expect(handle(corner).className).toContain('touch-none');
     }
-    expect(handle('se').style.left).toBe('calc(80% - 22px)');
-    expect(handle('se').style.top).toBe('calc(100% - 22px)');
-    expect(handle('nw').style.left).toBe('calc(20% - 22px)');
-    expect(handle('nw').style.top).toBe('calc(0% - 22px)');
+    expect(handle('se').style.left).toBe('80%');
+    expect(handle('se').style.top).toBe('100%');
+    expect(handle('nw').style.left).toBe('20%');
+    expect(handle('nw').style.top).toBe('0%');
     expect(rect().className).toContain('touch-none');
+    // What that rule works from: the crop's size in percent of the photo's frame, and the limits.
+    const frame = screen.getByTestId('crop-frame');
+    expect(frame.className).toContain('crop-frame');
+    expect(frame.style.getPropertyValue('--crop-width')).toBe('60');
+    expect(frame.style.getPropertyValue('--crop-height')).toBe('100');
+    expect(frame.style.getPropertyValue('--target-min')).toBe(`${HANDLE_TARGET_MIN}px`);
+    expect(frame.style.getPropertyValue('--target-max')).toBe(`${HANDLE_TARGET}px`);
+    // They follow the crop, so the targets shrink as it does.
+    fireEvent.keyDown(stage(), { key: '-', shiftKey: true });
+    expect(Number(frame.style.getPropertyValue('--crop-width'))).toBeCloseTo(50, 6);
+  });
+
+  it('reads the same rule from the stylesheet that the tests below check in numbers', () => {
+    const css = readFileSync(join(process.cwd(), 'src/index.css'), 'utf8').replace(/\s+/g, ' ');
+    expect(css).toContain('.crop-frame { container-type: size; }');
+    expect(css).toContain(
+      '--target: clamp( var(--target-min), ' +
+        'min(var(--crop-width) * 1cqw, var(--crop-height) * 1cqh) / 3, var(--target-max) );',
+    );
+    expect(css).toContain('width: var(--target); height: var(--target); translate: -50% -50%;');
+  });
+});
+
+describe('the size of a corner target', () => {
+  it('is 44 pixels on a crop of normal size, and never more', () => {
+    expect(HANDLE_TARGET).toBe(44);
+    for (const side of [132, 200, 324, 1000]) expect(cornerTargetSize(side)).toBe(44);
+  });
+
+  it('is a third of the shorter side in between', () => {
+    expect(cornerTargetSize(120)).toBe(40);
+    expect(cornerTargetSize(99)).toBe(33);
+    expect(cornerTargetSize(75)).toBe(25);
+    // Where the two limits take over.
+    expect(cornerTargetSize(72)).toBe(24);
+    expect(cornerTargetSize(132)).toBe(44);
+  });
+
+  it('is 24 pixels on a small crop, and never less', () => {
+    expect(HANDLE_TARGET_MIN).toBe(24);
+    for (const side of [72, 58, 48, 30, 1, 0]) expect(cornerTargetSize(side)).toBe(24);
+  });
+
+  it('is 24 pixels on the smallest crop of the test photo, which leaves a strip to move it by', () => {
+    // The 4000 x 3000 photo for the 4:5 placement, with its frame 432 px wide on screen (what a
+    // 1280 x 900 window gives it): the smallest crop is half the output size.
+    const frame = { width: 432, height: 324 };
+    const smallest = {
+      width: LIMITS.min.width * frame.width,
+      height: LIMITS.min.height * frame.height,
+    };
+    const shorter = Math.min(smallest.width, smallest.height);
+    expect(shorter).toBeCloseTo((TARGET.width / 2 / SOURCE.width) * frame.width, 6);
+    expect(shorter).toBeGreaterThan(48);
+    expect(shorter).toBeLessThan(72);
+    expect(cornerTargetSize(shorter)).toBe(24);
+    // Two half-targets come off each side: what is left in the middle is for moving the crop.
+    expect(smallest.width - cornerTargetSize(shorter)).toBeGreaterThanOrEqual(24);
+    expect(smallest.height - cornerTargetSize(shorter)).toBeGreaterThanOrEqual(24);
+  });
+
+  it('leaves a middle strip of at least 24 pixels on every crop 48 pixels or more across', () => {
+    for (let side = 48; side <= 600; side += 0.5) {
+      const strip = side - cornerTargetSize(side);
+      expect(strip).toBeGreaterThanOrEqual(24);
+    }
+    // From 72 pixels up the strip is two thirds of the side, or more.
+    for (const side of [72, 100, 132, 300]) {
+      expect(side - cornerTargetSize(side)).toBeGreaterThanOrEqual((side * 2) / 3 - 1e-9);
+    }
   });
 });
 

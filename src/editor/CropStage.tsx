@@ -33,12 +33,13 @@
  */
 
 import { useEffect, useRef, useState } from 'react';
-import type { KeyboardEvent, PointerEvent } from 'react';
+import type { CSSProperties, KeyboardEvent, PointerEvent } from 'react';
 import { moveCrop, resizeCrop, sameCrop, toPhoto, toPhotoPlane } from '../lib/editor/geometry';
 import type { Corner, CropLimits, Point } from '../lib/editor/geometry';
 import type { DisplayPhoto } from '../lib/editor/sourcePhoto';
 import type { Rect } from '../types';
 import { focusClass } from '../app/styles';
+import { HANDLE_TARGET, HANDLE_TARGET_MIN } from './cornerTarget';
 
 export type CropStageProps = {
   photo: DisplayPhoto;
@@ -70,9 +71,6 @@ export type CropStageProps = {
   focalDescribedBy?: string;
   onFocalKeyDown: (event: KeyboardEvent<HTMLButtonElement>) => void;
 };
-
-/** The size of each corner's touch target, in CSS pixels. The square drawn inside is smaller. */
-export const HANDLE_TARGET = 44;
 
 const CORNERS: readonly Corner[] = ['nw', 'ne', 'sw', 'se'];
 
@@ -259,7 +257,22 @@ export function CropStage(props: CropStageProps) {
         }}
       >
         {/* The photo's frame. Everything in it is placed in percentages of the photo. */}
-        <div ref={frame} data-testid="crop-frame" className="absolute" style={inArea(PHOTO_ALONE)}>
+        <div
+          ref={frame}
+          data-testid="crop-frame"
+          className="crop-frame absolute"
+          style={
+            {
+              ...inArea(PHOTO_ALONE),
+              // For the corner targets' size: the crop's size in percent of this frame, and
+              // the limits on a target. See `.crop-handle` in src/index.css.
+              '--crop-width': shown.width * 100,
+              '--crop-height': shown.height * 100,
+              '--target-min': `${HANDLE_TARGET_MIN}px`,
+              '--target-max': `${HANDLE_TARGET}px`,
+            } as CSSProperties
+          }
+        >
           {/* The padding: the crop filled with the card's colour, under the photo. */}
           <div
             aria-hidden="true"
@@ -300,14 +313,13 @@ export function CropStage(props: CropStageProps) {
             <div
               key={corner}
               data-testid={`crop-handle-${corner}`}
-              className={`absolute flex touch-none items-center justify-center ${
+              // `crop-handle` sizes the target and centres it on the corner (src/index.css).
+              className={`crop-handle absolute flex touch-none items-center justify-center ${
                 corner === 'nw' || corner === 'se' ? 'cursor-nwse-resize' : 'cursor-nesw-resize'
               }`}
               style={{
-                width: HANDLE_TARGET,
-                height: HANDLE_TARGET,
-                left: `calc(${percent(corner.endsWith('w') ? shown.x : shown.x + shown.width)} - ${HANDLE_TARGET / 2}px)`,
-                top: `calc(${percent(corner.startsWith('n') ? shown.y : shown.y + shown.height)} - ${HANDLE_TARGET / 2}px)`,
+                left: percent(corner.endsWith('w') ? shown.x : shown.x + shown.width),
+                top: percent(corner.startsWith('n') ? shown.y : shown.y + shown.height),
               }}
               onPointerDown={(event) => onResizeStart(event, corner)}
               {...dragHandlers}
