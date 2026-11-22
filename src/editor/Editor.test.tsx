@@ -9,7 +9,7 @@ import { SessionPanel } from '../app/SessionPanel';
 import { CardDetails } from '../board/CardDetails';
 import { createDialogUndo } from '../board/dialogUndo';
 import { draftCard } from '../lib/board/cards';
-import { automaticCrop, cropLimits } from '../lib/editor/geometry';
+import { automaticCrop, cropLimits, fitWholeCrop } from '../lib/editor/geometry';
 import { SourcePhotoError } from '../lib/editor/sourcePhoto';
 import type { DisplayPhoto, SourcePhotoInput } from '../lib/editor/sourcePhoto';
 import { getPlacement } from '../lib/platforms';
@@ -17,7 +17,7 @@ import { useSessionStore } from '../store/sessionStore';
 import { hash, makeAsset } from '../test/fixtures';
 import type { Card, ImageEdit, PlacementSpec, Rect, Size } from '../types';
 import { HANDLE_TARGET } from './CropStage';
-import { Editor, HELP_TEXT, LOADING_TEXT } from './Editor';
+import { Editor, FIT_LABEL, HELP_TEXT, LOADING_TEXT } from './Editor';
 import { cropReadout, focalKindText, focalLabel, focalReadout, stageLabel } from './text';
 
 // Sizes come from the platform data, never from this file.
@@ -34,6 +34,8 @@ const PHOTO = makeAsset({
 const SOURCE: Size = { width: PHOTO.width, height: PHOTO.height };
 const AUTO = automaticCrop(SOURCE, TARGET, PHOTO.focal);
 const LIMITS = cropLimits(SOURCE, TARGET);
+/** The whole 4:3 photo in the 4:5 placement: a third of its height in padding above and below. */
+const FIT = fitWholeCrop(SOURCE, TARGET);
 const BLOB = new Blob(['photo']);
 
 /** Where the test puts the photo's frame on screen: a tenth of the photo's size. */
@@ -88,7 +90,15 @@ afterEach(() => {
 });
 
 /** Shows the editor for one card (the first unless told), following the store as the board does. */
-function Host({ missing = false, index = 0 }) {
+function Host({
+  missing = false,
+  index = 0,
+  preview = null,
+}: {
+  missing?: boolean;
+  index?: number;
+  preview?: string | null;
+}) {
   const blob = missing ? undefined : BLOB;
   const first = useSessionStore((state) => state.session?.cards[index]);
   const asset = useSessionStore((state) => state.session?.assets[0]);
@@ -100,6 +110,7 @@ function Host({ missing = false, index = 0 }) {
       target={TARGET}
       blob={blob}
       loadPhoto={loadPhoto}
+      backgroundPreview={preview}
     />
   );
 }
@@ -116,6 +127,8 @@ async function openEditor(ui = <Host />) {
 }
 
 const stage = () => screen.getByRole('application');
+const area = () => screen.getByTestId('crop-area');
+const padding = () => screen.getByTestId('crop-padding');
 const rect = () => screen.getByTestId('crop-rect');
 const handle = (corner: string) => screen.getByTestId(`crop-handle-${corner}`);
 const pointer = (extra: object = {}) => ({ pointerId: 1, isPrimary: true, button: 0, ...extra });
@@ -225,7 +238,63 @@ describe('the crop area', () => {
     expect(rect().style.top).toBe('0%');
     expect(rect().style.width).toBe('60%');
     expect(rect().style.height).toBe('100%');
-    expect(screen.getByTestId('crop-frame').style.aspectRatio).toBe('4000 / 3000');
+  });
+
+  it('shows the fit frame, with the photo in the middle of it', async () => {
+    await openEditor();
+    // The whole 4000 x 3000 photo in a 4:5 shape is 4000 x 5000: the area shown has that shape.
+    const [across, down] = area().style.aspectRatio.split(' / ').map(Number);
+    expect(across).toBeCloseTo(4000, 6);
+    expect(down).toBeCloseTo(5000, 6);
+    // The photo takes its full width and the middle three fifths of its height.
+    const photo = screen.getByTestId('crop-frame').style;
+    expect(Number.parseFloat(photo.left)).toBeCloseTo(0, 6);
+    expect(Number.parseFloat(photo.width)).toBeCloseTo(100, 6);
+    expect(Number.parseFloat(photo.top)).toBeCloseTo(20, 6);
+    expect(Number.parseFloat(photo.height)).toBeCloseTo(60, 6);
+  });
+
+  it('is the photo alone when the photo has the shape of the placement', async () => {
+    const same = makeAsset({ id: hash('b'), fileName: 'same.jpg', width: 2160, height: 2700 });
+    act(() => {
+      store().clearSession(() => true);
+      store().createSession('Same shape');
+      store().addAssets([{ asset: same, blob: BLOB }]);
+      store().addCard(draftCard(same, FEED));
+    });
+    render(<Host />);
+    loads[0]?.resolve({ ...photoOf(), source: { width: 2160, height: 2700 } });
+    await act(() => Promise.resolve());
+    const photo = screen.getByTestId('crop-frame').style;
+    expect(Number.parseFloat(photo.left)).toBeCloseTo(0, 6);
+    expect(Number.parseFloat(photo.top)).toBeCloseTo(0, 6);
+    expect(Number.parseFloat(photo.width)).toBeCloseTo(100, 6);
+    expect(Number.parseFloat(photo.height)).toBeCloseTo(100, 6);
+    // Fit whole photo has nothing to do: the crop is already the whole photo.
+    const before = snapshot();
+    fireEvent.click(screen.getByRole('button', { name: FIT_LABEL }));
+    expectUntouched(before);
+  });
+
+  it('is the same size and in the same place whatever the crop is', async () => {
+    await openEditor();
+    const layout = () => [
+      area().getAttribute('style'),
+      screen.getByTestId('crop-frame').getAttribute('style'),
+    ];
+    const before = layout();
+    fireEvent.click(screen.getByRole('button', { name: FIT_LABEL }));
+    expect(layout()).toEqual(before);
+    fireEvent.keyDown(stage(), { key: '-', shiftKey: true });
+    expect(layout()).toEqual(before);
+    // During a drag too.
+    fireEvent.pointerDown(handle('se'), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(handle('se'), pointer(at(3, 3)));
+    expect(layout()).toEqual(before);
+    fireEvent.pointerUp(handle('se'), pointer(at(3, 3)));
+    expect(layout()).toEqual(before);
+    fireEvent.click(screen.getByRole('button', { name: 'Reset crop' }));
+    expect(layout()).toEqual(before);
   });
 
   it('gives every corner a touch target of at least 44 pixels', async () => {
@@ -500,6 +569,280 @@ describe('Reset crop', () => {
     expectCrop(crop(), AUTO);
     expect(store().undoStack).toHaveLength(before.undo + 1);
     expect(reset).toBeDisabled();
+  });
+});
+
+describe('Fit whole photo', () => {
+  const fitButton = () => screen.getByRole('button', { name: FIT_LABEL });
+
+  it('is a button next to Reset crop', async () => {
+    await openEditor();
+    const reset = screen.getByRole('button', { name: 'Reset crop' });
+    expect(FIT_LABEL).toBe('Fit whole photo');
+    expect(reset.nextElementSibling).toBe(fitButton());
+    expect(fitButton()).toBeEnabled();
+  });
+
+  it('shows the whole photo, centred on the photo and not on the focal point, as one change', async () => {
+    await openEditor();
+    // Move the focal point off-centre first, so centring on it would show.
+    act(() => {
+      store().setAssetFocal(PHOTO.id, { x: 0.2, y: 0.8 });
+    });
+    const before = snapshot();
+    fireEvent.click(fitButton());
+    // All of the width, and five thirds of the height: a third above and a third below.
+    expectCrop(crop(), { x: 0, y: -1 / 3, width: 1, height: 5 / 3 });
+    expectCrop(crop(), FIT);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+    expect(Number.parseFloat(rect().style.top)).toBeCloseTo(-100 / 3, 3);
+    expect(Number.parseFloat(rect().style.height)).toBeCloseTo(500 / 3, 3);
+    expect(stage()).toHaveAccessibleDescription(cropReadout(FIT));
+    expect(cropReadout(FIT)).toBe(
+      "The crop is 100% of the photo's width and 167% of its height, starting 0% from the left " +
+        'and 33% past the top edge. It is larger than the photo, so the picture has padding.',
+    );
+  });
+
+  it('does nothing, and adds no undo step, when the crop is already the whole photo', async () => {
+    await openEditor();
+    fireEvent.click(fitButton());
+    const before = snapshot();
+    fireEvent.click(fitButton());
+    fireEvent.click(fitButton());
+    expectUntouched(before);
+    // The same crop reached with the keyboard, or saved and loaded, counts as the same too.
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        draft.edit = { ...card().edit, crop: { ...FIT, y: FIT.y + 5e-10 } };
+      });
+    });
+    const again = snapshot();
+    fireEvent.click(fitButton());
+    expectUntouched(again);
+  });
+
+  it('is undone by one Ctrl/Cmd-Z, back to the crop before', async () => {
+    await openEditor();
+    fireEvent.keyDown(stage(), { key: 'ArrowRight' });
+    const moved = crop();
+    fireEvent.click(fitButton());
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    expectCrop(crop(), moved);
+  });
+
+  it('takes the card off its automatic crop, so moving the focal point leaves the crop alone', async () => {
+    await openEditor();
+    fireEvent.click(fitButton());
+    const marker = screen.getByTestId('focal-marker');
+    fireEvent.keyDown(marker, { key: 'ArrowRight', shiftKey: true });
+    expect(store().session?.assets[0]?.focal.x).toBeCloseTo(0.6, 10);
+    expectCrop(crop(), FIT);
+  });
+
+  it('is put back to the automatic crop by Reset crop, which keeps the background colour', async () => {
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        draft.background = '#0a7f5c';
+      });
+    });
+    await openEditor();
+    const reset = screen.getByRole('button', { name: 'Reset crop' });
+    fireEvent.click(fitButton());
+    expect(card().background).toBe('#0a7f5c');
+    expect(reset).toBeEnabled();
+    fireEvent.click(reset);
+    expectCrop(crop(), AUTO);
+    expect(card().background).toBe('#0a7f5c');
+    expect(reset).toBeDisabled();
+  });
+
+  it('is explained in the help text', async () => {
+    await openEditor();
+    expect(screen.getByText(HELP_TEXT)).toBeInTheDocument();
+    expect(HELP_TEXT).toContain('Fit whole photo');
+    expect(HELP_TEXT).toContain('background colour');
+  });
+});
+
+describe('padding in the editor', () => {
+  it('is drawn inside the crop, under the photo, in white for a card with no colour', async () => {
+    await openEditor();
+    expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
+    // The same place as the crop, so only the part of the crop outside the photo shows it.
+    for (const side of ['left', 'top', 'width', 'height'] as const) {
+      expect(padding().style[side]).toBe(rect().style[side]);
+    }
+    fireEvent.click(screen.getByRole('button', { name: FIT_LABEL }));
+    for (const side of ['left', 'top', 'width', 'height'] as const) {
+      expect(padding().style[side]).toBe(rect().style[side]);
+    }
+    // It comes before the photo in the page, so the photo is drawn over it.
+    const photo = screen.getByTestId('crop-frame').querySelector('canvas');
+    expect(padding().compareDocumentPosition(photo as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("is drawn in the card's colour, and follows it", async () => {
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        draft.background = '#0a7f5c';
+      });
+    });
+    await openEditor();
+    expect(padding().style.backgroundColor).toBe('rgb(10, 127, 92)');
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        draft.background = '#000000';
+      });
+    });
+    expect(padding().style.backgroundColor).toBe('rgb(0, 0, 0)');
+  });
+
+  it('shows a colour being tried in the picker instead, without writing it, and goes back', async () => {
+    const view = await openEditor();
+    const before = snapshot();
+    view.rerender(<Host preview="#ff8800" />);
+    expect(padding().style.backgroundColor).toBe('rgb(255, 136, 0)');
+    expectUntouched(before);
+    view.rerender(<Host preview={null} />);
+    expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
+  });
+
+  it('follows the crop while a corner is dragged past the photo', async () => {
+    await openEditor();
+    const se = handle('se');
+    fireEvent.pointerDown(se, pointer(at(0.8, 1)));
+    fireEvent.pointerMove(se, pointer(at(0.9, 1.1)));
+    expect(Number.parseFloat(rect().style.height)).toBeGreaterThan(100);
+    expect(padding().style.height).toBe(rect().style.height);
+    expect(padding().style.top).toBe(rect().style.top);
+    fireEvent.pointerUp(se, pointer(at(0.9, 1.1)));
+  });
+});
+
+describe('the crop limits in the editor', () => {
+  it('a corner dragged past the edge of the photo stops at the fit size, centred', async () => {
+    await openEditor();
+    const before = snapshot();
+    const se = handle('se');
+    fireEvent.pointerDown(se, pointer(at(0.8, 1)));
+    // Far past the photo's right and bottom edges.
+    fireEvent.pointerMove(se, pointer(at(4, 4)));
+    expect(Number.parseFloat(rect().style.width)).toBeCloseTo(100, 3);
+    expect(Number.parseFloat(rect().style.top)).toBeCloseTo(-100 / 3, 3);
+    fireEvent.pointerMove(se, pointer(at(9, 9)));
+    fireEvent.pointerUp(se, pointer(at(9, 9)));
+    expectCrop(crop(), FIT);
+    expect(store().undoStack).toHaveLength(before.undo + 1);
+  });
+
+  it('ends where the pointer is, whatever way the corner was dragged there', async () => {
+    await openEditor();
+    const se = handle('se');
+    fireEvent.pointerDown(se, pointer(at(0.8, 1)));
+    // Out past the fit size, which slides the crop, and back to where a direct drag would be.
+    fireEvent.pointerMove(se, pointer(at(4, 4)));
+    fireEvent.pointerMove(se, pointer(at(0.7, 0.5)));
+    fireEvent.pointerUp(se, pointer(at(0.7, 0.5)));
+    expectCrop(crop(), { x: 0.2, y: 0, width: 0.5, height: 0.5 * LIMITS.shape });
+  });
+
+  it('every corner reaches the fit size', async () => {
+    await openEditor();
+    const far: Record<string, [number, number]> = {
+      nw: [-4, -4],
+      ne: [5, -4],
+      sw: [-4, 5],
+      se: [5, 5],
+    };
+    for (const corner of ['nw', 'ne', 'sw', 'se']) {
+      fireEvent.click(screen.getByRole('button', { name: 'Reset crop' }));
+      const [x, y] = far[corner] as [number, number];
+      const grab = {
+        nw: at(0.2, 0),
+        ne: at(0.8, 0),
+        sw: at(0.2, 1),
+        se: at(0.8, 1),
+      }[corner] as { clientX: number; clientY: number };
+      fireEvent.pointerDown(handle(corner), pointer(grab));
+      fireEvent.pointerMove(handle(corner), pointer(at(x, y)));
+      fireEvent.pointerUp(handle(corner), pointer(at(x, y)));
+      expectCrop(crop(), FIT);
+    }
+  });
+
+  it('a crop of the fit size cannot be moved, by dragging or with the arrow keys', async () => {
+    await openEditor();
+    fireEvent.click(screen.getByRole('button', { name: FIT_LABEL }));
+    const before = snapshot();
+    for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+      fireEvent.keyDown(stage(), { key });
+      fireEvent.keyDown(stage(), { key, shiftKey: true });
+    }
+    fireEvent.pointerDown(rect(), pointer(at(0.5, 0.5)));
+    fireEvent.pointerMove(rect(), pointer(at(0.9, 0.1)));
+    fireEvent.pointerUp(rect(), pointer(at(0.9, 0.1)));
+    expectUntouched(before);
+  });
+
+  it('the arrow keys move a padded crop only as far as each axis allows', async () => {
+    await openEditor();
+    // 0.78 wide and 1.3 tall: across it stays in the photo; down it must hold the photo, so it
+    // may start anywhere from 0.3 above the photo's top edge to exactly on it.
+    const padded = { x: 0.1, y: -0.15, width: 0.78, height: 0.78 * LIMITS.shape };
+    act(() => {
+      store().updateCard(card().id, (draft) => {
+        draft.edit = { ...card().edit, crop: padded };
+      });
+    });
+    for (let press = 0; press < 3; press++) {
+      fireEvent.keyDown(stage(), { key: 'ArrowDown', shiftKey: true });
+    }
+    expect(crop().y).toBe(0);
+    const atBottom = snapshot();
+    fireEvent.keyDown(stage(), { key: 'ArrowDown' });
+    expectUntouched(atBottom);
+    for (let press = 0; press < 5; press++) {
+      fireEvent.keyDown(stage(), { key: 'ArrowUp', shiftKey: true });
+    }
+    expect(crop().y).toBeCloseTo(1 - 0.78 * LIMITS.shape, 10);
+    const atTop = snapshot();
+    fireEvent.keyDown(stage(), { key: 'ArrowUp' });
+    expectUntouched(atTop);
+    // Across it is narrower than the photo, so it stops at the photo's edges.
+    for (let press = 0; press < 5; press++) {
+      fireEvent.keyDown(stage(), { key: 'ArrowRight', shiftKey: true });
+    }
+    expect(crop().x).toBeCloseTo(1 - 0.78, 10);
+    for (let press = 0; press < 12; press++) {
+      fireEvent.keyDown(stage(), { key: 'ArrowLeft', shiftKey: true });
+    }
+    expect(crop().x).toBe(0);
+  });
+
+  it('each key press is one undo step, with padding as without', async () => {
+    await openEditor();
+    const before = snapshot();
+    fireEvent.keyDown(stage(), { key: '=', shiftKey: true });
+    fireEvent.keyDown(stage(), { key: 'Add' });
+    fireEvent.keyDown(stage(), { key: 'ArrowUp' });
+    expect(crop().height).toBeGreaterThan(1);
+    expect(store().undoStack).toHaveLength(before.undo + 3);
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    fireEvent.keyDown(window, { key: 'z', ctrlKey: true });
+    expectCrop(crop(), AUTO);
+  });
+
+  it('the focal point marker stays on the photo, though the area shown is larger', async () => {
+    await openEditor();
+    const marker = screen.getByTestId('focal-marker');
+    fireEvent.pointerDown(marker, pointer(at(0.5, 0.5)));
+    // Into the space above the photo, inside the area shown.
+    fireEvent.pointerMove(marker, pointer(at(0.5, -0.2)));
+    expect(marker.style.top).toBe('calc(0% - 22px)');
+    fireEvent.pointerUp(marker, pointer(at(0.5, -0.2)));
+    expect(store().session?.assets[0]?.focal).toEqual({ x: 0.5, y: 0 });
   });
 });
 

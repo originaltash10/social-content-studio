@@ -13,7 +13,7 @@ import { useSessionStore } from '../store/sessionStore';
 import { fakeRenderClient, resultFor } from '../test/fakeRenderClient';
 import type { FakeRenderClient } from '../test/fakeRenderClient';
 import { hash, makeAsset } from '../test/fixtures';
-import type { ImageEdit, PlacementSpec, Rect, Session } from '../types';
+import type { Card, ImageEdit, PlacementSpec, Rect, Session } from '../types';
 import { draftCard } from '../lib/board/cards';
 import { fitWholeCrop } from '../lib/editor/geometry';
 import { cropToPixels } from '../lib/render/crop';
@@ -1256,6 +1256,98 @@ describe('undo in the dialog', () => {
     window.addEventListener('keydown', hear);
     return { dialog, outside, stop: () => window.removeEventListener('keydown', hear) };
   }
+
+  it('has its controls in the order the spec gives, from the crop area to Close', async () => {
+    const { dialog, stop } = await openFailing();
+    /** What Tab reaches, in order: everything focusable that is not disabled. */
+    const order = () =>
+      [...dialog.querySelectorAll<HTMLElement>('button, input, [tabindex="0"]')]
+        .filter((element) => !(element as HTMLButtonElement).disabled)
+        .map(
+          (element) =>
+            element.getAttribute('data-testid') ??
+            element.getAttribute('aria-label')?.split('.')[0] ??
+            (element.closest('label')?.textContent || element.textContent),
+        );
+    const rest = [
+      'Fit whole photo',
+      'Background colour picker',
+      'Hex code',
+      'JPG',
+      'PNG',
+      'Quality',
+      'Export this card even though it fails its checks',
+      'Close',
+    ];
+    // Reset crop is disabled on the automatic crop, so Tab passes over it.
+    expect(order()).toEqual(['Crop of site', 'focal-marker', ...rest]);
+    fireEvent.keyDown(within(dialog).getByRole('application'), { key: 'ArrowRight' });
+    expect(order()).toEqual(['Crop of site', 'focal-marker', 'Reset crop', ...rest]);
+    stop();
+  });
+
+  it('draws a colour being tried in the picker in the editor, and writes it when the picker closes', async () => {
+    const { dialog, stop } = await openFailing();
+    const picker = within(dialog).getByLabelText('Background colour picker') as HTMLInputElement;
+    const padding = () => within(dialog).getByTestId('crop-padding');
+    expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
+    const before = { session: store().session, steps: store().undoStack.length };
+    fireEvent.input(picker, { target: { value: '#0a7f5c' } });
+    // Live in the editor, and not written yet: no undo step, no new render.
+    expect(padding().style.backgroundColor).toBe('rgb(10, 127, 92)');
+    expect(store().session).toBe(before.session);
+    expect(client.calls).toHaveLength(1);
+    fireEvent.input(picker, { target: { value: '#112233' } });
+    expect(padding().style.backgroundColor).toBe('rgb(17, 34, 51)');
+    // Closed with no change: the editor goes back to the card's colour.
+    fireEvent(picker, new Event('cancel', { bubbles: true }));
+    expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
+    expect(store().undoStack).toHaveLength(before.steps);
+    // Closed on a new colour: one step, and the card is rendered again in that colour.
+    fireEvent.input(picker, { target: { value: '#0a7f5c' } });
+    fireEvent(picker, new Event('change', { bubbles: true }));
+    expect(store().session?.cards[0]?.background).toBe('#0a7f5c');
+    expect(store().undoStack).toHaveLength(before.steps + 1);
+    expect(padding().style.backgroundColor).toBe('rgb(10, 127, 92)');
+    await sent(2);
+    expect(client.calls[1]?.job.plan.background).toBe('#0a7f5c');
+    answer(1);
+    await idle();
+    stop();
+  });
+
+  it('steps back through a colour change and Fit whole photo, one press each', async () => {
+    const { dialog, outside, stop } = await openFailing();
+    const card = () => store().session?.cards[0] as Card & { edit: ImageEdit };
+    const automatic = card().edit.crop;
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Fit whole photo' }));
+    const fitted = card().edit.crop;
+    expect(fitted.height).toBeGreaterThan(1);
+    const hex = within(dialog).getByRole('textbox', { name: 'Hex code' });
+    fireEvent.change(hex, { target: { value: '0A7F5C' } });
+    fireEvent.keyDown(hex, { key: 'Enter' });
+    expect(card().background).toBe('#0a7f5c');
+    // The card is rendered again for what it is now: fitted, in the new colour.
+    await sent(2);
+    expect(client.calls.at(-1)?.job.plan.background).toBe('#0a7f5c');
+
+    // In the hex box Ctrl/Cmd-Z is for typing: it is let through, and nothing is undone.
+    expect(undoKey(hex).defaultPrevented).toBe(false);
+    expect(card().background).toBe('#0a7f5c');
+    // On the colour picker, which holds no text, each press undoes one change in the dialog.
+    const picker = within(dialog).getByLabelText('Background colour picker');
+    expect(undoKey(picker).defaultPrevented).toBe(true);
+    expect(Object.hasOwn(card(), 'background')).toBe(false);
+    expect(card().edit.crop).toEqual(fitted);
+    expect(undoKey(picker).defaultPrevented).toBe(true);
+    expect(card().edit.crop).toEqual(automatic);
+    // Nothing left of the dialog's own: a further press does nothing, and the card stays.
+    undoKey(picker);
+    expect(store().session?.cards).toHaveLength(1);
+    expect(card().edit.crop).toEqual(automatic);
+    expect(outside).toHaveBeenCalledTimes(1);
+    stop();
+  });
 
   it('with focus on the override checkbox, one press undoes exactly one dialog change', async () => {
     const { dialog, outside, stop } = await openFailing();
