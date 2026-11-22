@@ -814,7 +814,16 @@ async function runExportCheck(browser, name, url) {
     );
     await exportRegion.screenshot({ path: join(outDir, `${name}-export.png`) });
   } catch (error) {
-    check('the check ran to the end', false, String(error).split('\n')[0]);
+    // A timeout's first line does not say which step stalled. Playwright names what it was
+    // waiting for on a later line, wrapped in terminal colour codes, which are cut off here.
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
   } finally {
     await context.close();
   }
