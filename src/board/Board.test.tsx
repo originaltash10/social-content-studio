@@ -653,6 +653,21 @@ describe('the details dialog', () => {
     expect(within(checks).getAllByRole('listitem')[0]).toHaveTextContent(/^Warning:/);
   });
 
+  it('opens at its top, even when the browser has scrolled it down to its first control', async () => {
+    // What a browser does in a short window: showModal puts focus on the first control, and
+    // scrolls the dialog down to it when it is below the fold.
+    const showModal = vi
+      .spyOn(HTMLDialogElement.prototype, 'showModal')
+      .mockImplementation(function scrolled(this: HTMLDialogElement) {
+        this.setAttribute('open', '');
+        this.scrollTop = 24;
+      });
+    const { dialog } = await openDetails();
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(dialog.scrollTop).toBe(0);
+    expect(within(dialog).getByRole('heading', { level: 2 })).toHaveFocus();
+  });
+
   it('puts focus on its heading when it opens, so Tab starts at the top of the dialog', async () => {
     const { dialog } = await openDetails();
     const heading = within(dialog).getByRole('heading', { level: 2 });

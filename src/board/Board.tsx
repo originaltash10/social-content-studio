@@ -189,6 +189,9 @@ export function Board({
       // dialog from the top: crop area, focal point, Reset crop, Fit whole photo, background
       // colour, file type, and Close last.
       document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
+      // In a short window that first control can be below the fold, and the browser scrolls
+      // the dialog down to it before the focus is moved. Start at the top of the dialog too.
+      element.scrollTop = 0;
     }
     if (!openCard && element.open) element.close();
   }, [openCard, dialogHeadingId]);
