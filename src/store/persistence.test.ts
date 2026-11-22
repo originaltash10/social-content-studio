@@ -923,6 +923,129 @@ describe('clear session', () => {
   });
 });
 
+describe("when the browser's database is slow to remember or forget the folder", () => {
+  const CLEARED = 'Session cleared. Nothing on disk was deleted.';
+  const bundle = () =>
+    buildBundle({
+      session: makeSession({ id: 'from-bundle', name: 'From a bundle' }),
+      brand: makeBrand(),
+      blobs: new Map([
+        [A, new Blob(['photo bytes'])],
+        [B, new Blob(['video bytes!'])],
+      ]),
+    });
+
+  /**
+   * Makes the next call of a folder-memory function finish only when the test says so. The
+   * change itself still happens at once, as in the browser: a database carries out its writes
+   * in the order they were asked for, and only the answer comes back late.
+   */
+  function slow(fn: typeof forgetFolder | typeof rememberFolder, change: () => void) {
+    let finish: () => void = () => undefined;
+    vi.mocked(fn as typeof forgetFolder).mockImplementationOnce(() => {
+      change();
+      return new Promise<void>((resolve) => (finish = resolve));
+    });
+    return () => finish();
+  }
+  const slowForget = () => slow(forgetFolder, () => (remembered.dir = null));
+
+  it('Clear says so at once, without waiting for the folder to be forgotten', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const finish = slowForget();
+    const clearing = requestClearSession(() => true);
+    // Still forgetting the folder, and already cleared and saying so.
+    expect(store().session).toBeNull();
+    expect(currentFolderName()).toBeNull();
+    expect(status()).toEqual({ kind: 'info', message: CLEARED });
+    finish();
+    expect(await clearing).toBe(true);
+    expect(status()).toEqual({ kind: 'info', message: CLEARED });
+  });
+
+  it('Clear, then Load .scs before the folder is forgotten: the status is the loaded session', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const file = await bundle();
+    const finish = slowForget();
+    const clearing = requestClearSession(() => true);
+    expect(await loadBundle(file, 'later.scs')).toBe(true);
+    // The clear finishes last. It must not touch the session that was opened after it.
+    finish();
+    expect(await clearing).toBe(true);
+    expect(open().id).toBe('from-bundle');
+    expect(store().dirty).toBe(false);
+    expect(currentFolderName()).toBeNull();
+    expect(status()).toEqual({
+      kind: 'info',
+      message: 'Opened "From a bundle" from bundle "later.scs".',
+    });
+  });
+
+  it('Clear, then Open folder before the folder is forgotten: the new folder is kept and remembered', async () => {
+    const first = await folderWithSession('First');
+    await openFolder(first);
+    const second = await folderWithSession('Second');
+    const finish = slowForget();
+    const clearing = requestClearSession(() => true);
+    pickerReturns(second);
+    expect(await openSessionFolder()).toBe(true);
+    finish();
+    expect(await clearing).toBe(true);
+    // The folder the session saves to and the folder Reopen last will offer are the new one:
+    // the database forgets the old folder before it remembers the new one, however late it
+    // answers.
+    expect(currentFolderName()).toBe('Second');
+    expect(await recallFolder()).toBe(second.handle);
+    // And the status is the new session's.
+    expect(status()).toEqual({
+      kind: 'info',
+      message: 'Opened "Topping out" from folder "Second".',
+    });
+    // The session still saves to its folder, and only to it.
+    edit();
+    expect(await autosave()).toBe(true);
+    expect(writes(second).length).toBeGreaterThan(0);
+    expect(writes(first)).toEqual([]);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('Clear, then New session before the folder is forgotten: the status is the new session', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const finish = slowForget();
+    const clearing = requestClearSession(() => true);
+    newSession('Next');
+    finish();
+    expect(await clearing).toBe(true);
+    expect(open().name).toBe('Next');
+    expect(store().dirty).toBe(true);
+    expect(currentFolderName()).toBeNull();
+    expect(status()).toEqual({ kind: 'info', message: 'Started "Next". It is not saved yet.' });
+  });
+
+  it('Open folder, then Load .scs before the folder is remembered: the status is the bundle', async () => {
+    const dir = await folderWithSession();
+    const file = await bundle();
+    const finish = slow(rememberFolder, () => (remembered.dir = dir.handle));
+    pickerReturns(dir);
+    const opening = openSessionFolder();
+    // Wait until the folder's session is in the store and only remembering is left.
+    await vi.waitFor(() => expect(rememberFolder).toHaveBeenCalledTimes(1));
+    expect(await loadBundle(file, 'later.scs')).toBe(true);
+    finish();
+    expect(await opening).toBe(true);
+    // The bundle was opened last, so it is the open session, with no folder, and says so.
+    expect(open().id).toBe('from-bundle');
+    expect(currentFolderName()).toBeNull();
+    expect(status()).toEqual({
+      kind: 'info',
+      message: 'Opened "From a bundle" from bundle "later.scs".',
+    });
+  });
+});
+
 describe('the previously opened folder is never written by a later session', () => {
   it('after Clear session and then New session, autosave writes nothing to it', async () => {
     const dir = await folderWithSession();

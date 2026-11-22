@@ -10,6 +10,9 @@
  *   never opens a picker, never shows a permission prompt, and never starts a download.
  * - No function here rejects. Every failure ends up in the store's status line.
  * - Clearing deletes nothing on disk and makes no file-system calls at all.
+ * - Remembering or forgetting the folder waits for the browser's database, which can be slow.
+ *   Nothing is written to the store after that wait, so a clear or a load that is still
+ *   finishing can never put its status over that of a session started since.
  */
 
 import { downloadBlob } from '../lib/session/download';
@@ -216,8 +219,9 @@ function loadedStatus(loaded: LoadedSession, from: string): Status {
 async function adopt(loaded: LoadedSession, dir: FileSystemDirectoryHandle | null, from: string) {
   store().loadSession(loaded);
   bound = dir ? { dir, sessionId: loaded.session.id } : null;
-  if (dir) await ignoreFailure(rememberFolder(dir));
+  // Before the folder is remembered, not after: see the last rule at the top of this file.
   store().setStatus(loadedStatus(loaded, from));
+  if (dir) await ignoreFailure(rememberFolder(dir));
 }
 
 /** Opens the folder picker and loads the session in the chosen folder. */
@@ -321,7 +325,8 @@ export function newSession(name: string): void {
 export async function requestClearSession(confirm: () => boolean): Promise<boolean> {
   if (!store().clearSession(confirm)) return false;
   bound = null;
-  await ignoreFailure(forgetFolder());
+  // Before the folder is forgotten, not after: see the last rule at the top of this file.
   say('info', 'Session cleared. Nothing on disk was deleted.');
+  await ignoreFailure(forgetFolder());
   return true;
 }
