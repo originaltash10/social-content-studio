@@ -3,7 +3,7 @@
  * store is real and the card is read from it on every render, as the card dialog does. What the
  * boxes say is checked against copyStatus(), which is itself checked against validate().
  */
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { copyStatus, parseHashtags } from '../lib/board/copyChecks';
 import { getPlacement, platforms } from '../lib/platforms';
@@ -292,5 +292,234 @@ describe('a card whose placement is not in platforms.json', () => {
     expect(caption()).not.toHaveAttribute('aria-describedby');
     expect(describedText(hashtags())).toEqual([HASHTAG_HINT]);
     expect(screen.queryByText(STORY_NOTE)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Writing the text: one undo step per visit (SPEC.md, "Undo")
+// ---------------------------------------------------------------------------------------------
+
+const steps = () => store().undoStack.length;
+const stored = () => store().session?.cards[0]?.copy;
+/** Moves focus into a box, as Tab or a click does. */
+const enter = (element: HTMLElement) => act(() => element.focus());
+/** Moves focus out of a box, as Tab away or a click elsewhere does. */
+const leave = (element: HTMLElement) => act(() => element.blur());
+/** Marks the session as saved, so a later write would set the dirty flag again. */
+const save = () => act(() => store().markSaved(store().revision));
+
+/** Shows the page as hidden (another tab, or the tab closing), or visible again. */
+function setVisibility(state: 'hidden' | 'visible') {
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => state });
+  act(() => {
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+}
+
+describe('writing the text', () => {
+  it('makes no store write while typing', () => {
+    openWith('instagram', 'feed-vertical', { caption: 'Start' });
+    save();
+    const revision = store().revision;
+    const before = steps();
+    enter(caption());
+    for (const text of ['S', 'St', 'Sta', 'Start again']) type(caption(), text);
+    expect(store().revision).toBe(revision);
+    expect(steps()).toBe(before);
+    expect(store().dirty).toBe(false);
+    expect(stored()?.caption).toBe('Start');
+    expect(caption().value).toBe('Start again');
+  });
+
+  it('writes once, as one undo step, on leaving the box', () => {
+    openWith('instagram', 'feed-vertical', { caption: 'Start' });
+    const before = steps();
+    enter(caption());
+    type(caption(), 'Start again');
+    type(caption(), 'Start again today');
+    leave(caption());
+    expect(steps()).toBe(before + 1);
+    expect(stored()?.caption).toBe('Start again today');
+  });
+
+  it('writes nothing when the text is the same on leaving', () => {
+    openWith('instagram', 'feed-vertical', { caption: 'Start', hashtags: ['#a', 'b'] });
+    save();
+    const before = steps();
+    enter(caption());
+    type(caption(), 'Something else');
+    type(caption(), 'Start');
+    leave(caption());
+    enter(firstComment());
+    leave(firstComment());
+    expect(steps()).toBe(before);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('writes nothing when only the hashtag formatting changed', () => {
+    openWith('instagram', 'feed-vertical', { hashtags: ['#a', 'b'] });
+    save();
+    const before = steps();
+    enter(hashtags());
+    type(hashtags(), '#a,\n b ');
+    leave(hashtags());
+    expect(steps()).toBe(before);
+    expect(stored()?.hashtags).toEqual(['#a', 'b']);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('writes the parsed hashtags, in order and with duplicates, and shows them spaced', () => {
+    openWith('instagram', 'feed-vertical');
+    enter(hashtags());
+    type(hashtags(), '#b, a\n#b');
+    leave(hashtags());
+    expect(stored()?.hashtags).toEqual(['#b', 'a', '#b']);
+    expect(hashtags().value).toBe('#b a #b');
+  });
+
+  it('removes authoredBy when a box changes the text, and keeps it otherwise', () => {
+    const by = { provider: 'test-provider', model: 'test-model', at: '2026-11-23T00:00:00.000Z' };
+    for (const [field, from, to] of [
+      ['Caption', 'Hello', 'Hello there'],
+      ['Hashtags', '#a', '#a #b'],
+      ['First comment', 'First', 'First!'],
+    ] as const) {
+      const view = openWith('instagram', 'feed-vertical', {
+        caption: 'Hello',
+        hashtags: ['#a'],
+        firstComment: 'First',
+        authoredBy: by,
+      });
+      // Visiting without a change, or reformatting the hashtags, keeps it.
+      enter(box(field));
+      type(box(field), field === 'Hashtags' ? '#a,' : from);
+      leave(box(field));
+      expect(stored()?.authoredBy).toEqual(by);
+      // A change removes it, in the same undo step as the text.
+      const before = steps();
+      enter(box(field));
+      type(box(field), to);
+      leave(box(field));
+      expect(steps()).toBe(before + 1);
+      expect(stored()?.authoredBy).toBeUndefined();
+      // Undo brings back both the text and authoredBy.
+      act(() => {
+        store().undo();
+      });
+      expect(stored()?.authoredBy).toEqual(by);
+      view.unmount();
+    }
+  });
+
+  it('writes a box still focused when the boxes go away (the dialog closing), once', () => {
+    const view = openWith('instagram', 'feed-vertical', { firstComment: 'First' });
+    const before = steps();
+    enter(firstComment());
+    type(firstComment(), 'First, and more');
+    view.unmount();
+    expect(steps()).toBe(before + 1);
+    expect(stored()?.firstComment).toBe('First, and more');
+  });
+
+  it('writes nothing on going away when no box is focused', () => {
+    const view = openWith('instagram', 'feed-vertical');
+    const before = steps();
+    enter(caption());
+    type(caption(), 'Written on leaving');
+    leave(caption());
+    view.unmount();
+    expect(steps()).toBe(before + 1);
+  });
+
+  it('writes the focused box when the page is hidden, and carries on from there', () => {
+    try {
+      openWith('instagram', 'feed-vertical');
+      const before = steps();
+      enter(caption());
+      type(caption(), 'Typed before the tab closed');
+      setVisibility('hidden');
+      expect(steps()).toBe(before + 1);
+      expect(stored()?.caption).toBe('Typed before the tab closed');
+      // The box keeps its focus and its text; hiding again with nothing new writes nothing.
+      expect(caption()).toHaveFocus();
+      expect(caption().value).toBe('Typed before the tab closed');
+      setVisibility('visible');
+      setVisibility('hidden');
+      expect(steps()).toBe(before + 1);
+      // More typing in the same visit is written on leaving, as its own step.
+      setVisibility('visible');
+      type(caption(), 'Typed before the tab closed, and after');
+      leave(caption());
+      expect(steps()).toBe(before + 2);
+      expect(stored()?.caption).toBe('Typed before the tab closed, and after');
+    } finally {
+      setVisibility('visible');
+    }
+  });
+
+  it('writes nothing when the page is hidden with no box focused', () => {
+    try {
+      openWith('instagram', 'feed-vertical');
+      save();
+      setVisibility('hidden');
+      expect(store().dirty).toBe(false);
+    } finally {
+      setVisibility('visible');
+    }
+  });
+
+  it('does nothing when the card is gone by the time the text is written', () => {
+    try {
+      for (const how of ['blur', 'unmount', 'hidden'] as const) {
+        openWith('instagram', 'feed-vertical', { caption: 'Hello' });
+        const card = store().session?.cards[0] as Card;
+        // The boxes are given the card as it was, as a dialog that has not closed yet would.
+        cleanup();
+        const view = render(<CopyFields card={card} spec={FEED} record={(change) => change()} />);
+        enter(caption());
+        type(caption(), 'Hello, gone');
+        // Undo of the card's creation removes it.
+        act(() => {
+          store().undo();
+        });
+        expect(store().session?.cards).toEqual([]);
+        save();
+        const before = steps();
+        if (how === 'blur') leave(caption());
+        if (how === 'hidden') setVisibility('hidden');
+        view.unmount();
+        expect(steps()).toBe(before);
+        expect(store().dirty).toBe(false);
+        expect(store().session?.cards).toEqual([]);
+        setVisibility('visible');
+      }
+    } finally {
+      setVisibility('visible');
+    }
+  });
+
+  it('shows the text again after an undo, in a box that is not focused', () => {
+    openWith('instagram', 'feed-vertical', { caption: 'Before' });
+    enter(caption());
+    type(caption(), 'After');
+    leave(caption());
+    act(() => {
+      store().undo();
+    });
+    expect(stored()?.caption).toBe('Before');
+    expect(caption().value).toBe('Before');
+  });
+
+  it('keeps the draft of a focused box when another write changes the card', () => {
+    openWith('instagram', 'feed-vertical', { caption: 'Caption', firstComment: 'Comment' });
+    enter(caption());
+    type(caption(), 'Caption being typed');
+    act(() => {
+      store().updateCard(store().session?.cards[0]?.id as string, (card) => {
+        card.copy.firstComment = 'Comment changed elsewhere';
+      });
+    });
+    expect(caption().value).toBe('Caption being typed');
+    expect(firstComment().value).toBe('Comment changed elsewhere');
   });
 });
