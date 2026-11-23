@@ -1,6 +1,6 @@
 # Social Content Studio — Product Spec
 
-As of November 16, 2026
+As of November 19, 2026
 
 ## Purpose
 
@@ -45,6 +45,8 @@ Each row is a feature Claude Code should treat as a unit of work. Priority: P1 s
 | Import | Campaign brief field (topic, audience, CTA, link) | P1 | Fed into every AI prompt |
 | Images | Smart crop with draggable focal point per source image | P1 | One focal point drives all ratios; a duplicated card gets its own |
 | Images | Resize and export to platform dimensions, JPG and PNG, quality slider | P1 | |
+| Images | Fit whole photo: show the whole photo in the placement's shape, with padding | P1 | New cards still fill the frame; padding appears only when the user chooses it |
+| Images | Background colour per card, filling any space where the crop goes past the photo's edges | P1 | White unless the user picks another colour |
 | Images | Text overlay with brand fonts, colors, alignment, shadow, safe-zone snapping | P1 | |
 | Images | Logo and watermark placement with opacity | P1 | |
 | Images | Carousel builder: order slides, per-slide text, cover slide | P1 | Instagram up to 20 slides; LinkedIn exports as PDF document |
@@ -113,7 +115,7 @@ Validation runs on every change and produces one result per card: pass, warn, or
    Where a placement's `hashtagsInCaption` is true in `platforms.json` (LinkedIn, Facebook, X), the length is measured on the caption plus the hashtags joined with spaces, for both the cap and the truncation warnings. Where it is false (Instagram, where hashtags go in the first comment), only the caption counts.
 5. Hashtag count under cap; otherwise fail.
 6. Carousel slide count in range and all slides the same ratio; otherwise fail.
-7. Any text overlay, logo, or focal point inside a Story or Reel unsafe zone; warn.
+7. Any text overlay, logo, or focal point inside a Story or Reel unsafe zone; warn. The focal point is always inside the photo, so this rule is the same for a crop with padding.
 8. Alt text missing on an image; warn.
 9. Caption contains a URL on Instagram, where links are not clickable; warn.
 
@@ -247,6 +249,7 @@ type Card = {
   placement: string;       // key into platforms.json
   parentId?: string;       // set when duplicated; gives lineage
   focal?: { x: number; y: number };   // 0..1; the card's own focal point, set when duplicated; without it the card uses its asset's
+  background?: string;     // "#rrggbb", lowercase; fills any space where the crop goes past the photo's edges; without it, white
   version: number;
   status: 'draft' | 'review' | 'approved';
   edit: ImageEdit | VideoEdit | CarouselEdit;
@@ -263,9 +266,50 @@ type CarouselEdit = { slides: { assetId: string; edit: ImageEdit }[]; coverIndex
 type Provenance = { provider: string; model: string; at: string };
 ```
 
-Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit` and `copy`, gives the copy its own `focal` (the source card's focal point at that moment), sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit`, `copy` and `background`, gives the copy its own `focal` (the source card's focal point at that moment), sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+
+Background colour: `background` is stored as `#rrggbb` in lowercase, and a card without one is white (`#ffffff`). When a session is loaded, only a valid six-digit hex colour is accepted, in any case, and it is made lowercase; anything else is dropped, so the card is treated as white. The field is in the serializer's allowlist, and undo snapshots include it. The session `version` stays 1: a session saved without the field loads and renders exactly as before.
+
+Crop limits: a crop is stored as fractions of the photo as it is displayed, after any rotation recorded in the file, which is the space the renderer draws from. It is always locked to the placement's shape. The "fit size" is the smallest crop of the placement's shape that contains the whole photo, and the "fit frame" is the fit-size crop centred on the photo's centre. Each axis is treated separately:
+
+- On an axis where the crop is no longer than the photo, the crop stays inside the photo.
+- On an axis where the crop is longer than the photo, the crop contains the photo on that axis and stays inside the fit frame. A crop between the photo's length and the fit length can slide within the fit frame, so the padding can be uneven; at the full fit size the crop is centred.
+- A crop is never larger than the fit size. The smallest crop is unchanged: half the output size, or the fill-the-frame crop when the photo is too small for that. If the smallest crop were ever larger than the fit size, the crop would be that smallest size, centred on the photo; with the current smallest crop this cannot happen.
+
+A session file keeps a crop as four finite numbers and is not checked against these limits when it is loaded. The limits are applied wherever the crop is used, in the editor and in the renderer, where the photo's size and the placement are known. A saved crop that breaks them is shown and rendered corrected, and is written back only when the user changes the crop.
 
 Brand kit (`brand.json`): logos as PNG paths, fonts as uploaded files or Google Fonts names, a color palette, a voice document (plain text, under 500 words), and overlay presets. It is exportable on its own so the marketing team can share one file with the office.
+
+## Fit whole photo and background colour
+
+A new card's crop fills the frame: the largest crop of the placement's shape inside the photo, centred on the focal point. Padding appears only when the user chooses it, by pressing Fit whole photo or by dragging or resizing the crop past the photo's edges.
+
+Editor:
+
+- Fit whole photo, next to Reset crop, sets the fit-size crop, centred on the photo's centre and not on the focal point. It is one undo step. If the crop already equals that crop, within 1e-9, it does nothing and adds no undo step. The card is then no longer on its automatic crop, so moving the photo's focal point does not re-centre it.
+- Reset crop returns the card to the automatic fill-the-frame crop and keeps the background colour.
+- The editor shows the fit frame, or the photo alone when the photo and the placement have the same shape, so every place the crop can reach is visible. The area is the same size before, during and after a drag, whether or not the card has padding.
+- Inside the crop, the space outside the photo is drawn in the card's background colour, and follows the colour picker while it is being used.
+- Dragging the crop, dragging a corner, and the keyboard (arrow keys, = and -, the number pad's + and -, Shift for steps ten times as big) all follow the crop limits. A key press is one undo step.
+- The focal point stays inside the photo, and its marker is kept on the photo even though the area shown is larger.
+
+Card details shows a Background colour control for every card the editor can open, with a short note that the colour fills any space where the crop goes past the photo's edges. It has the browser's colour picker and a labelled text box showing the hex code:
+
+- Colour picker: the editor shows each colour as it is tried, and the card is changed once, as one undo step, when the picker reports its change. If the picker closes with no change there is no undo step and the editor goes back to the card's colour.
+- Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
+- Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
+
+The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, export override, Close. Arrow keys on the crop never change any other control.
+
+Rendering:
+
+- The output is the crop. The part of the crop that overlaps the photo is drawn from the photo, and only that overlapping part of the photo is read, never an area outside it. The rest is the background colour.
+- The edges between the photo and the padding are rounded to whole output pixels once and used for both, so there is no seam and no gap.
+- JPG: the whole picture is filled with the background colour first, so transparent parts of the photo take it. With the default white this is what a JPG has always done.
+- PNG: only the padding is coloured, and the photo's own transparency is kept.
+- Whether a picture counts as enlarged is worked out from the crop's size, padding included, as before.
+- Board tiles, the card dialog's preview and export all show the padded result. Export renders each card again and strips metadata as before.
+- A card with no background colour and a crop inside the photo renders byte for byte as it did before this feature.
 
 ## Build phases and MVP scope
 

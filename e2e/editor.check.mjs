@@ -34,6 +34,16 @@
  * beside the details) and 900 × 900 (editor above them), each leave the dialog's height and the
  * crop area's and the Close button's positions within 1 px on every animation frame.
  *
+ * Last of all, in a fresh session, padding and the background colour (`runPadding`): the Tab
+ * order of the card dialog; a corner dragged past the photo's edge stops at the fit size; the
+ * corner targets shrink on a small crop, where a press in the middle moves it and a press on a
+ * corner resizes it; Fit whole photo reached with Tab and pressed from the keyboard; a colour
+ * typed into the hex box shows in the editor and in the rendered file; Ctrl-Z steps back
+ * through the colour and the fit; the arrow keys keep to the crop limits; Reset crop removes
+ * the padding and keeps the colour; a .scs download and reload keeps both; and a duplicate has
+ * the colour. Each of these is its own step, so one that cannot run (in a version of the app
+ * without the control it needs) fails by itself and the rest still run.
+ *
  * How it reaches things. Every control is reached the way a person reaches it: with Tab, or
  * with a real mouse click or drag. Keys are sent with page.keyboard, to whatever has focus. It
  * never calls element.focus() and never dispatches an event straight at an element. The two
@@ -53,6 +63,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describeSampling, startSampling, steady, stopSampling } from './layoutSampler.mjs';
+import { describePadding, measurePadding, paddingOk, rgbOf } from './paddingPixels.mjs';
 import { controlWorkers, holdRenders, releaseRenders, waitForHeld } from './workerHold.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -1392,6 +1403,10 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
       await openEditor(other, FEED_CARD);
       const sideOpen = await firstCard();
       await closeEditor(other);
+      // The page is let go by the dialog's close event, which the browser sends a moment after
+      // the dialog is hidden. Until then the page is still locked and its scrollbar measures
+      // as no width at all, so the measurement waits for the page to be let go.
+      await other.waitForFunction(() => document.documentElement.style.overflow !== 'hidden');
       const sideAfter = await firstCard();
       check(
         'with scrollbars that take up room, opening and closing the dialog does not move the board sideways',
@@ -1421,7 +1436,543 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
     await openEditor(page, FEED_CARD);
     await page.getByRole('dialog').screenshot({ path: join(outDir, `${name}-editor.png`) });
   } catch (error) {
-    check('the check ran to the end', false, String(error).split('\n')[0]);
+    // A timeout's first line does not say which step stalled. Playwright names what it was
+    // waiting for on a later line, wrapped in terminal colour codes, which are cut off here.
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
+  } finally {
+    await context.close();
+  }
+  return checks.every((c) => c.ok);
+}
+
+// --------------------------------------------------------------------------- padding
+
+/**
+ * The colour typed into the hex box, as typed (capitals, no "#") and as the app stores it. It
+ * is at least 128 away, in some channel, from each of the four colours of the test photo, so no
+ * pixel of the photo can pass for padding.
+ */
+const TYPED_COLOUR = '00E5FF';
+const COLOUR = '#00e5ff';
+const COLOUR_CSS = 'rgb(0, 229, 255)';
+const WHITE = '#ffffff';
+/**
+ * How long to wait for a control that only this feature has. Short, so a version of the app
+ * without it fails that step quickly and by name; every other wait keeps its usual time.
+ */
+const NEW_CONTROL_MS = 5_000;
+
+/** The whole photo in an output's shape, centred: the same rule as the app's, worked out here. */
+function fitWhole(target) {
+  const ratio = target.width / target.height;
+  const wide = SOURCE.width / SOURCE.height > ratio;
+  const width = wide ? 1 : (SOURCE.height * ratio) / SOURCE.width;
+  const height = wide ? SOURCE.width / ratio / SOURCE.height : 1;
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
+
+/** The corner target's size for a crop whose shorter side on screen is `side`: the app's rule. */
+const cornerTarget = (side) => Math.min(44, Math.max(24, side / 3));
+
+async function runPadding(browser, name, url) {
+  console.log(`\n== Editor check, padding and background colour: ${name} (${url})`);
+  const context = await browser.newContext({
+    acceptDownloads: true,
+    viewport: { width: 1280, height: 900 },
+  });
+  const problems = [];
+  context.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+  });
+  context.on('requestfailed', (request) => problems.push(`request failed: ${request.url()}`));
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  page.on('dialog', (dialog) => dialog.accept());
+
+  const checks = [];
+  const check = (title, ok, detail = '') => {
+    checks.push({ title, ok, detail });
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${title}${detail ? `: ${detail}` : ''}`);
+  };
+  /** Runs one step. If it cannot be carried out, that is its failure, and the next step runs. */
+  const step = async (title, run) => {
+    try {
+      await run(title);
+    } catch (error) {
+      const lines = String(error).split('\n');
+      const call = lines.find((line) => line.includes('- waiting for '));
+      const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+      check(title, false, waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''));
+    }
+  };
+
+  const dialog = page.getByRole('dialog');
+  const stage = dialog.getByRole('application');
+  const fitButton = dialog.getByRole('button', { name: 'Fit whole photo', exact: true });
+  const resetButton = dialog.getByRole('button', { name: 'Reset crop', exact: true });
+  const picker = dialog.getByLabel('Background colour picker');
+  const hex = dialog.getByRole('textbox', { name: 'Hex code' });
+  const FIT = fitWhole(FEED);
+  const AUTO = automatic(FEED, { x: 0.5, y: 0.5 });
+  const paddingStyle = () =>
+    dialog
+      .getByTestId('crop-padding')
+      .evaluate((element) => getComputedStyle(element).backgroundColor);
+  const boxOf = (testId) => dialog.getByTestId(testId).boundingBox();
+  const cardCount = () => page.locator('article').count();
+  /** The open card's file once it has been made again, measured for padding in `colour`. */
+  const fileAfter = async (cardLabel, previous, crop, colour) => {
+    const src = await nextRender(page, cardLabel, previous);
+    return { src, report: await measurePadding(page, { url: src }, crop, rgbOf(colour)) };
+  };
+  /** What Tab reaches in the dialog, from its heading to Close, each named by what it is. */
+  const tabOrder = async () => {
+    // A real click on the heading puts focus where it is when the dialog opens.
+    await dialog.getByRole('heading', { level: 2 }).click();
+    const order = [];
+    for (let presses = 0; presses < 16; presses++) {
+      await page.keyboard.press('Tab');
+      const reached = await page.evaluate(() => {
+        const element = document.activeElement;
+        if (element.getAttribute('role') === 'application') return 'crop area';
+        if (element.dataset.testid === 'focal-marker') return 'focal point';
+        if (element.tagName === 'INPUT') {
+          const kinds = {
+            color: 'colour picker',
+            text: 'hex box',
+            radio: 'file type',
+            range: 'quality',
+            checkbox: 'export override',
+          };
+          return kinds[element.type] ?? element.type;
+        }
+        return element.textContent.trim();
+      });
+      order.push(reached);
+      if (reached === 'Close') break;
+    }
+    return order;
+  };
+  const focusCrop = async () => {
+    await clickCrop(page);
+  };
+  const undo = () => page.keyboard.press('Control+z');
+
+  try {
+    await startSession(page, url);
+    let feedSrc = await tileSrc(page, FEED_CARD);
+    await openEditor(page, FEED_CARD);
+    const sizes = { dialog: [], area: [] };
+    const measureLayout = async () => {
+      const box = await dialog.boundingBox();
+      const area = await stage.boundingBox();
+      sizes.dialog.push(`${box.width} × ${box.height}`);
+      sizes.area.push(`${area.width} × ${area.height}`);
+    };
+    await measureLayout();
+
+    // 1. The Tab order of the dialog, on a new card: Reset crop is disabled, so Tab passes it.
+    await step('the Tab order of the card dialog is the one in the spec', async (title) => {
+      const fresh = await tabOrder();
+      await focusCrop();
+      await page.keyboard.press('ArrowRight');
+      feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+      const moved = await tabOrder();
+      await focusCrop();
+      await undo();
+      feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+      const rest = ['Fit whole photo', 'colour picker', 'hex box', 'file type', 'quality', 'Close'];
+      const want = ['crop area', 'focal point', ...rest];
+      const wantMoved = ['crop area', 'focal point', 'Reset crop', ...rest];
+      check(
+        title,
+        JSON.stringify(fresh) === JSON.stringify(want) &&
+          JSON.stringify(moved) === JSON.stringify(wantMoved),
+        `new card: ${fresh.join(' → ')}; after moving the crop: ${moved.join(' → ')}`,
+      );
+    });
+
+    // 2. A corner dragged far past the photo's edge: the crop stops at the fit size, centred.
+    await step(
+      "a corner dragged past the photo's edge stops at the fit size, with padding",
+      async (title) => {
+        await drag(page, 'crop-handle-se', 1.5, 1.5);
+        await settle(page);
+        const first = (await shown(page)).crop;
+        if (!sameCrop(first, FIT)) {
+          // Said here, before waiting for a file that a crop that did not grow would not make.
+          check(
+            title,
+            false,
+            `the corner stopped at ${cropText(first)}, not at the fit size ${cropText(FIT)}`,
+          );
+          return;
+        }
+        const { src, report } = await fileAfter(FEED_CARD, feedSrc, FIT, WHITE);
+        feedSrc = src;
+        // Dragged further still, it does not move.
+        await drag(page, 'crop-handle-se', 0.5, 0.5);
+        await settle(page);
+        const second = (await shown(page)).crop;
+        check(
+          title,
+          sameCrop(first, FIT) &&
+            sameCrop(second, FIT) &&
+            (await tileSrc(page, FEED_CARD)) === feedSrc &&
+            report.width === FEED.width &&
+            report.height === FEED.height &&
+            paddingOk(report, { photoMayMatch: true }),
+          `crop ${cropText(first)}, then ${cropText(second)} (fit size ${cropText(FIT)}); ${describePadding(report)}`,
+        );
+        await focusCrop();
+        await undo();
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+      },
+    );
+
+    // 3. The corner targets: 44 px on a crop of normal size, smaller on the smallest crop, where
+    //    a press in the middle of the crop moves it and a press on a corner target resizes it.
+    await step(
+      'on the smallest crop the corner targets shrink: a press in the middle moves it, a press on a corner resizes it',
+      async (title) => {
+        const normal = await boxOf('crop-handle-se');
+        await focusCrop();
+        for (let presses = 0; presses < 9; presses++) await page.keyboard.press('Shift+Minus');
+        // Away from the focal point's marker, which sits in the middle of the photo and would
+        // otherwise be what a press in the middle of this small crop lands on.
+        for (let presses = 0; presses < 3; presses++) await page.keyboard.press('Shift+ArrowLeft');
+        for (let presses = 0; presses < 2; presses++) await page.keyboard.press('Shift+ArrowUp');
+        await settle(page);
+        const small = await boxOf('crop-rect');
+        const target = await boxOf('crop-handle-se');
+        const wanted = cornerTarget(Math.min(small.width, small.height));
+        const before = (await shown(page)).crop;
+        // The middle of the crop, which the corner targets leave free.
+        const middle = { x: small.x + small.width / 2, y: small.y + small.height / 2 };
+        await page.mouse.move(middle.x, middle.y);
+        await page.mouse.down();
+        await page.mouse.move(middle.x + 30, middle.y, { steps: 5 });
+        await page.mouse.up();
+        await settle(page);
+        const moved = (await shown(page)).crop;
+        // The outer part of the south-east corner's target, outside the crop itself.
+        const corner = await boxOf('crop-handle-se');
+        const outer = { x: corner.x + corner.width - 4, y: corner.y + corner.height - 4 };
+        await page.mouse.move(outer.x, outer.y);
+        await page.mouse.down();
+        await page.mouse.move(outer.x + 40, outer.y + 50, { steps: 5 });
+        await page.mouse.up();
+        await settle(page);
+        const resized = (await shown(page)).crop;
+        check(
+          title,
+          near(normal.width, 44, 0.5) &&
+            near(normal.height, 44, 0.5) &&
+            wanted < 44 &&
+            near(target.width, wanted, 0.5) &&
+            near(target.height, wanted, 0.5) &&
+            Math.min(small.width, small.height) - target.width >= 24 &&
+            moved.x > before.x + 0.02 &&
+            near(moved.width, before.width, 0.002) &&
+            near(moved.y, before.y, 0.002) &&
+            resized.width > moved.width + 0.02 &&
+            near(resized.x, moved.x, 0.004),
+          `targets ${normal.width.toFixed(1)} px on the automatic crop and ${target.width.toFixed(1)} px ` +
+            `on a ${small.width.toFixed(1)} × ${small.height.toFixed(1)} px crop (rule gives ${wanted.toFixed(1)}); ` +
+            `crop ${cropText(before)}, after the middle press ${cropText(moved)}, after the corner press ${cropText(resized)}`,
+        );
+        await resetButton.click();
+        await settle(page);
+        feedSrc = await tileSrc(page, FEED_CARD);
+      },
+    );
+
+    // The steps from here count the dialog's own undo steps, so start a dialog with none.
+    await closeEditor(page);
+    await waitForRendered(page, 2);
+    feedSrc = await tileSrc(page, FEED_CARD);
+    await openEditor(page, FEED_CARD);
+
+    // 4. Fit whole photo, reached with Tab and pressed from the keyboard.
+    await step(
+      'Tab reaches Fit whole photo; Enter shows the whole photo with white padding',
+      async (title) => {
+        await fitButton.waitFor({ timeout: NEW_CONTROL_MS });
+        feedSrc = await tileSrc(page, FEED_CARD);
+        await dialog.getByRole('heading', { level: 2 }).click();
+        const presses = await tabTo(page, fitButton, 'the Fit whole photo button');
+        await page.keyboard.press('Enter');
+        const { src, report } = await fileAfter(FEED_CARD, feedSrc, FIT, WHITE);
+        feedSrc = src;
+        const { crop } = await shown(page);
+        await measureLayout();
+        check(
+          title,
+          sameCrop(crop, FIT) &&
+            (await paddingStyle()) === 'rgb(255, 255, 255)' &&
+            paddingOk(report, { photoMayMatch: true }),
+          `${presses} Tab presses; crop ${cropText(crop)}; ${describePadding(report)}`,
+        );
+      },
+    );
+
+    // 5. A colour typed into the hex box, reached with Tab from the Fit whole photo button.
+    await step(
+      'a colour typed into the hex box shows in the editor and in the rendered file',
+      async (title) => {
+        await hex.waitFor({ timeout: NEW_CONTROL_MS });
+        await dialog.getByRole('heading', { level: 2 }).click();
+        await tabTo(page, hex, 'the hex box');
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type(TYPED_COLOUR);
+        await page.keyboard.press('Enter');
+        const { src, report } = await fileAfter(FEED_CARD, feedSrc, FIT, COLOUR);
+        feedSrc = src;
+        // The preview in the dialog is the same file as the board's tile.
+        const preview = await dialog.locator('figure img').getAttribute('src');
+        const inDialog = await measurePadding(page, { url: preview }, FIT, rgbOf(COLOUR));
+        await measureLayout();
+        check(
+          title,
+          (await hex.inputValue()) === COLOUR &&
+            (await picker.inputValue()) === COLOUR &&
+            (await paddingStyle()) === COLOUR_CSS &&
+            paddingOk(report) &&
+            paddingOk(inDialog),
+          `typed "${TYPED_COLOUR}"; hex box "${await hex.inputValue()}", editor padding ${await paddingStyle()}; ` +
+            `file: ${describePadding(report)}; preview in the dialog: ${describePadding(inDialog)}`,
+        );
+      },
+    );
+
+    // 6. Ctrl-Z, after Tab has left the hex box: the colour goes first, then the fit.
+    await step(
+      'Ctrl-Z steps back through the colour and then the fit, one press each, and then does nothing',
+      async (title) => {
+        await hex.waitFor({ timeout: NEW_CONTROL_MS });
+        // In the hex box Ctrl-Z belongs to typing. One Tab moves on, to the file type.
+        await page.keyboard.press('Tab');
+        const onFileType = await dialog
+          .getByRole('radio', { name: 'JPG' })
+          .evaluate((e) => e === document.activeElement);
+        await undo();
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+        const afterOne = {
+          crop: (await shown(page)).crop,
+          colour: await paddingStyle(),
+          hex: await hex.inputValue(),
+        };
+        await undo();
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+        const afterTwo = { crop: (await shown(page)).crop, colour: await paddingStyle() };
+        await undo();
+        await settle(page);
+        const afterThree = (await shown(page)).crop;
+        check(
+          title,
+          onFileType &&
+            sameCrop(afterOne.crop, FIT) &&
+            afterOne.colour === 'rgb(255, 255, 255)' &&
+            afterOne.hex === WHITE &&
+            sameCrop(afterTwo.crop, AUTO) &&
+            sameCrop(afterThree, AUTO) &&
+            (await tileSrc(page, FEED_CARD)) === feedSrc &&
+            (await cardCount()) === 2,
+          `after one press: crop ${cropText(afterOne.crop)}, padding ${afterOne.colour}, hex "${afterOne.hex}"; ` +
+            `after two: crop ${cropText(afterTwo.crop)}; after three: crop ${cropText(afterThree)}, ${await cardCount()} cards`,
+        );
+      },
+    );
+
+    // 7. The arrow keys and the crop limits.
+    await step(
+      'a fit-size crop cannot be moved, and the arrow keys stop where each axis allows',
+      async (title) => {
+        await fitButton.click({ timeout: NEW_CONTROL_MS });
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+        await focusCrop();
+        for (const key of ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown']) {
+          await page.keyboard.press(key);
+          await page.keyboard.press(`Shift+${key}`);
+        }
+        await settle(page);
+        const atFit = (await shown(page)).crop;
+        const unmoved = (await tileSrc(page, FEED_CARD)) === feedSrc;
+        // One step smaller: 0.9 of the width and 1.5 of the height, inside a fit frame that
+        // reaches a third of the photo's height above it and below it.
+        await page.keyboard.press('Shift+Minus');
+        const width = FIT.width - 0.1;
+        const height = (width * FIT.height) / FIT.width;
+        const press = async (key, times) => {
+          for (let i = 0; i < times; i++) await page.keyboard.press(key);
+          await settle(page);
+          return (await shown(page)).crop;
+        };
+        const up = await press('Shift+ArrowUp', 5);
+        const down = await press('Shift+ArrowDown', 5);
+        const left = await press('Shift+ArrowLeft', 5);
+        const right = await press('Shift+ArrowRight', 5);
+        // Down the page the crop is taller than the photo: it must hold the photo and stay in the
+        // fit frame. Across it is narrower than the photo: it stays inside the photo.
+        const top = Math.max(1 - height, FIT.y);
+        const bottom = Math.min(0, FIT.y + FIT.height - height);
+        check(
+          title,
+          sameCrop(atFit, FIT) &&
+            unmoved &&
+            near(up.y, top, 0.004) &&
+            near(down.y, bottom, 0.004) &&
+            near(left.x, 0, 0.004) &&
+            near(right.x, 1 - width, 0.004) &&
+            near(right.width, width, 0.004) &&
+            near(right.height, height, 0.004),
+          `at the fit size: ${cropText(atFit)}, file unchanged: ${unmoved}; 0.9 wide: up to y ${up.y.toFixed(3)} ` +
+            `(limit ${top.toFixed(3)}), down to y ${down.y.toFixed(3)} (limit ${bottom.toFixed(3)}), ` +
+            `left to x ${left.x.toFixed(3)}, right to x ${right.x.toFixed(3)} (limit ${(1 - width).toFixed(3)})`,
+        );
+        await settle(page);
+        feedSrc = await tileSrc(page, FEED_CARD);
+      },
+    );
+
+    // 8. Reset crop: the padding goes, the colour stays.
+    await step('Reset crop removes the padding and keeps the colour', async (title) => {
+      await hex.click({ timeout: NEW_CONTROL_MS });
+      await page.keyboard.press('Control+a');
+      await page.keyboard.type(TYPED_COLOUR);
+      await page.keyboard.press('Enter');
+      feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+      await resetButton.click();
+      feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+      const { crop } = await shown(page);
+      const plain = await inspect(page, feedSrc);
+      const keptHex = await hex.inputValue();
+      // The colour is still the card's: Fit whole photo again pads in it.
+      await fitButton.click();
+      const { src, report } = await fileAfter(FEED_CARD, feedSrc, FIT, COLOUR);
+      feedSrc = src;
+      check(
+        title,
+        sameCrop(crop, AUTO) && meets(plain, AUTO) && keptHex === COLOUR && paddingOk(report),
+        `after Reset crop: crop ${cropText(crop)}, ${describeFile(plain, AUTO)}, hex box "${keptHex}"; ` +
+          `after Fit whole photo again: ${describePadding(report)}`,
+      );
+    });
+
+    // 9. The dialog and the crop area are the same size whatever the crop and the colour are.
+    await step(
+      'the dialog and the crop area keep their size as padding and a colour are added',
+      async (title) => {
+        await measureLayout();
+        const same = (list) => list.length >= 4 && list.every((size) => size === list[0]);
+        check(
+          title,
+          same(sizes.dialog) && same(sizes.area),
+          `dialog ${sizes.dialog.join(', ')}; crop area ${sizes.area.join(', ')}`,
+        );
+      },
+    );
+
+    // 10. Save, reload and reopen: the padded crop and the colour come back.
+    await step(
+      'Download .scs, Clear, Load .scs: the padded crop and the colour come back',
+      async (title) => {
+        await hex.waitFor({ timeout: NEW_CONTROL_MS });
+        await closeEditor(page);
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          page.getByRole('button', { name: 'Download .scs' }).click(),
+        ]);
+        const bundlePath = join(outDir, `${name}-padding-session.scs`);
+        await download.saveAs(bundlePath);
+        const zip = await JSZip.loadAsync(readFileSync(bundlePath));
+        const saved = JSON.parse(await zip.file('session.json').async('string'));
+        const savedFeed = saved.cards.find((card) => card.placement === 'feed-vertical');
+        const savedSquare = saved.cards.find((card) => card.placement === 'image-square');
+        await page.getByRole('button', { name: 'Clear session' }).click();
+        await page.getByText('No session is open.').waitFor();
+        await page.getByLabel('Session bundle file').setInputFiles(bundlePath);
+        await page
+          .getByRole('status')
+          .filter({ hasText: /^Opened / })
+          .first()
+          .waitFor();
+        await waitForRendered(page, 2);
+        feedSrc = await tileSrc(page, FEED_CARD);
+        const report = await measurePadding(page, { url: feedSrc }, FIT, rgbOf(COLOUR));
+        await openEditor(page, FEED_CARD);
+        const reopened = {
+          crop: (await shown(page)).crop,
+          hex: await hex.inputValue(),
+          colour: await paddingStyle(),
+        };
+        check(
+          title,
+          savedFeed.background === COLOUR &&
+            sameCrop(savedFeed.edit.crop, FIT) &&
+            // The card that was never given a colour has none in the file.
+            !('background' in savedSquare) &&
+            saved.version === 1 &&
+            paddingOk(report) &&
+            sameCrop(reopened.crop, FIT) &&
+            reopened.hex === COLOUR &&
+            reopened.colour === COLOUR_CSS,
+          `saved: background ${JSON.stringify(savedFeed.background)}, crop ${cropText(savedFeed.edit.crop)}, ` +
+            `other card has a colour: ${'background' in savedSquare}; after reload: ${describePadding(report)}; ` +
+            `reopened: crop ${cropText(reopened.crop)}, hex box "${reopened.hex}", padding ${reopened.colour}`,
+        );
+      },
+    );
+
+    // 11. A duplicate has the colour, and the padded crop.
+    await step('Duplicate copies the colour and the padded crop', async (title) => {
+      await hex.waitFor({ timeout: NEW_CONTROL_MS });
+      await closeEditor(page);
+      await page.getByRole('button', { name: `Duplicate ${FEED_CARD}`, exact: true }).click();
+      await waitForRendered(page, 3);
+      const copySrc = await tileSrc(page, COPY_CARD);
+      const report = await measurePadding(page, { url: copySrc }, FIT, rgbOf(COLOUR));
+      await openEditor(page, COPY_CARD);
+      const copy = {
+        crop: (await shown(page)).crop,
+        hex: await hex.inputValue(),
+        colour: await paddingStyle(),
+      };
+      check(
+        title,
+        paddingOk(report) &&
+          sameCrop(copy.crop, FIT) &&
+          copy.hex === COLOUR &&
+          copy.colour === COLOUR_CSS,
+        `the copy's file: ${describePadding(report)}; in its editor: crop ${cropText(copy.crop)}, ` +
+          `hex box "${copy.hex}", padding ${copy.colour}`,
+      );
+    });
+
+    check('no failed requests and no console errors', problems.length === 0, problems.join(' | '));
+    writeFileSync(
+      join(outDir, `${name}-padding-report.json`),
+      JSON.stringify({ checks, problems }, null, 2),
+    );
+  } catch (error) {
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
   } finally {
     await context.close();
   }
@@ -1438,6 +1989,7 @@ try {
   const devUrl = `http://localhost:${PORTS.dev}/`;
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, devUrl);
   failed = !(await runEditor(browser, scrollbarBrowser, 'dev', devUrl)) || failed;
+  failed = !(await runPadding(browser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -1452,6 +2004,7 @@ try {
     siteUrl,
   );
   failed = !(await runEditor(browser, scrollbarBrowser, 'production', siteUrl)) || failed;
+  failed = !(await runPadding(browser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);

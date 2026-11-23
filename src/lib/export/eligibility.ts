@@ -66,7 +66,13 @@ export function exportTarget(card: Card, session: ExportSession, lookups: Lookup
   const blob = session.missingAssetIds.includes(asset.id) ? undefined : lookups.blobOf(asset.id);
   if (!blob) return { ok: false, message: missingFileMessage(asset.fileName) };
   try {
-    return { ok: true, asset, spec, plan: planRender({ asset, spec, edit: card.edit }), blob };
+    return {
+      ok: true,
+      asset,
+      spec,
+      plan: planRender({ asset, spec, edit: card.edit, background: card.background }),
+      blob,
+    };
   } catch (error) {
     const message =
       error instanceof RenderPlanError ? error.message : unexpectedError(asset.fileName).message;

@@ -152,6 +152,29 @@ describe('rendering a card', () => {
     expect(job.plan.target).toEqual(target(FEED));
   });
 
+  it("plans with the card's background colour, and renders again when it changes", async () => {
+    const plain = card('c1');
+    controller.sync(session([plain]));
+    await client.sent(1);
+    expect(call(0).job.plan.background).toBe('#ffffff');
+    const green = { ...plain, background: '#0a7f5c' };
+    controller.sync(session([green]));
+    await client.sent(2);
+    expect(call(1).job.plan).toEqual(
+      planRender({
+        asset: ASSET,
+        spec: FEED,
+        edit: green.edit as ImageEdit,
+        background: '#0a7f5c',
+      }),
+    );
+    expect(call(1).job.plan.background).toBe('#0a7f5c');
+    // The same colour again is the same file: nothing more is sent.
+    controller.sync(session([{ ...green }]));
+    await new Promise((done) => setTimeout(done, 0));
+    expect(client.render).toHaveBeenCalledTimes(2);
+  });
+
   it('shows each stage of the render as it happens', async () => {
     controller.sync(session([card('c1')]));
     await client.sent(1);

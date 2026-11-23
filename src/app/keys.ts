@@ -1,12 +1,12 @@
 /** Keyboard helpers shared by the app-wide undo and the card dialog's undo. */
 
 /** Inputs that hold no text, so Ctrl/Cmd-Z there has no typing to undo. */
-const NOT_TEXT_INPUTS: ReadonlySet<string> = new Set(['checkbox', 'radio', 'range']);
+const NOT_TEXT_INPUTS: ReadonlySet<string> = new Set(['checkbox', 'radio', 'range', 'color']);
 
 /**
  * True when the key event came from a field where Ctrl/Cmd-Z should undo typing instead: a text
- * input, a text area, or editable content. A checkbox, a radio button or a slider holds no text,
- * so Ctrl/Cmd-Z there undoes the last change instead.
+ * input, a text area, or editable content. A checkbox, a radio button, a slider or a colour
+ * picker holds no text, so Ctrl/Cmd-Z there undoes the last change instead.
  */
 export function isTyping(target: EventTarget | null): boolean {
   return (

@@ -5,6 +5,7 @@
  */
 
 import type { Asset, ImageEdit, MediaType, PlacementSpec, Rect, Size } from '../../types';
+import { DEFAULT_BACKGROUND, parseBackground } from './background';
 import { cropToPixels, fitCropToRatio, focalCrop } from './crop';
 import type { PixelRect } from './crop';
 
@@ -33,7 +34,10 @@ export type OutputFormat = ImageEdit['format'];
 export type RenderPlan = {
   /** The photo's displayed size, as recorded on the asset. */
   sourceSize: Size;
-  /** The part of the photo to use, in source pixels. */
+  /**
+   * The part of the photo to use, in source pixels. A crop with padding reaches past the photo
+   * on the padded axis.
+   */
   crop: PixelRect;
   /** The same crop in fractions of the photo, after fitting to the target ratio. */
   cropRect: Rect;
@@ -42,7 +46,15 @@ export type RenderPlan = {
   format: OutputFormat;
   /** 0..1. Only JPG uses it. */
   quality: number;
-  /** True when the crop has fewer pixels than the output, so the picture is enlarged. */
+  /**
+   * "#rrggbb". Fills the part of the crop outside the photo and, in a JPG, the transparent
+   * parts of the photo. White unless the card has a colour of its own.
+   */
+  background: string;
+  /**
+   * True when the crop has fewer pixels than the output, so the picture is enlarged. The
+   * crop's whole size counts, padding included.
+   */
   upscaled: boolean;
 };
 
@@ -87,6 +99,8 @@ export type PlanInput = {
   spec: PlacementSpec;
   /** The card's edit. Without a crop, the default crop from the asset's focal point is used. */
   edit?: Partial<Pick<ImageEdit, 'crop' | 'format' | 'quality'>>;
+  /** The card's background colour. Without a usable one, white is used. */
+  background?: string | undefined;
   /** Which of the placement's listed sizes to render; the first unless told otherwise. */
   sizeIndex?: number;
 };
@@ -96,7 +110,13 @@ function megapixels(pixels: number): string {
 }
 
 /** Plans one render. Throws a RenderPlanError when the render cannot be done. */
-export function planRender({ asset, spec, edit = {}, sizeIndex = 0 }: PlanInput): RenderPlan {
+export function planRender({
+  asset,
+  spec,
+  edit = {},
+  background,
+  sizeIndex = 0,
+}: PlanInput): RenderPlan {
   if (asset.kind !== 'image') {
     throw new RenderPlanError(
       'not-image-asset',
@@ -133,6 +153,7 @@ export function planRender({ asset, spec, edit = {}, sizeIndex = 0 }: PlanInput)
     target,
     format: edit.format ?? 'jpg',
     quality: clampQuality(edit.quality),
+    background: parseBackground(background) ?? DEFAULT_BACKGROUND,
     upscaled: target.width > crop.width || target.height > crop.height,
   };
 }

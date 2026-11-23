@@ -55,6 +55,32 @@
   }
 }
 
+/*
+ * The touch target on each corner of the crop in the editor (src/editor/CropStage.tsx, which
+ * sets the four variables on the photo's frame). A target is a third of the crop's shorter side
+ * on screen, never larger than --target-max and never smaller than --target-min, and is
+ * centred on its corner. So on a small crop the targets shrink and leave the middle of the crop
+ * free to be pressed and dragged. The photo's frame is a size container, which lets the crop's
+ * size on screen be worked out here from its size in percent of the frame (the cqw and cqh
+ * units) with no measuring in script.
+ */
+@layer components {
+  .crop-frame {
+    container-type: size;
+  }
+
+  .crop-handle {
+    --target: clamp(
+      var(--target-min),
+      min(var(--crop-width) * 1cqw, var(--crop-height) * 1cqh) / 3,
+      var(--target-max)
+    );
+    width: var(--target);
+    height: var(--target);
+    translate: -50% -50%;
+  }
+}
+
 /*! Inter, Copyright 2016 The Inter Project Authors (https://github.com/rsms/inter).
  * Inter Tight, Copyright 2022 The Inter Project Authors (https://github.com/rsms/inter-tight).
  * Both are licensed under the SIL Open Font License, Version 1.1: https://openfontlicense.org/

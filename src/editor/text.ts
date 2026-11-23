@@ -15,11 +15,22 @@ export function stageLabel(fileName: string): string {
 
 const whole = (fraction: number) => Math.round(fraction * 100);
 
-/** Where the crop is, in words, for example for a screen reader after an arrow key. */
+/** Where a crop starts along one axis: inside the photo, or past its edge when padded. */
+function startText(start: number, side: 'left' | 'top'): string {
+  const percent = whole(start);
+  return percent < 0 ? `${-percent}% past the ${side} edge` : `${percent}% from the ${side}`;
+}
+
+/**
+ * Where the crop is, in words, for example for a screen reader after an arrow key. A crop that
+ * is larger than the photo says so, and that the picture has padding.
+ */
 export function cropReadout(crop: Rect): string {
+  const padded = whole(crop.width) > 100 || whole(crop.height) > 100;
   return (
     `The crop is ${whole(crop.width)}% of the photo's width and ${whole(crop.height)}% of its ` +
-    `height, starting ${whole(crop.x)}% from the left and ${whole(crop.y)}% from the top.`
+    `height, starting ${startText(crop.x, 'left')} and ${startText(crop.y, 'top')}.` +
+    (padded ? ' It is larger than the photo, so the picture has padding.' : '')
   );
 }
 

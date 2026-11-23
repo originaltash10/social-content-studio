@@ -6,6 +6,17 @@
  * green rises top to bottom. Because a pixel's colour says where in the source it came from,
  * reading a few pixels of an output shows exactly which part of the photo was cropped, and
  * whether it is the right way up. Output sizes are read from platforms.json.
+ *
+ * Padding. The padding checks give a card a crop larger than its photo and a background colour,
+ * and read every pixel of the output: the padding must be the colour, the photo must start
+ * exactly where the padding stops, and a transparent part of the photo must take the colour in
+ * a JPG and stay transparent in a PNG. The crop is worked out here by plain arithmetic, not by
+ * the app's own crop code, so the check does not depend on what it is checking.
+ *
+ * Comparing two versions. `renderForComparison` renders a fixed set of ordinary cards (no
+ * colour, crop inside the photo) and returns a checksum of each output file. Run in two source
+ * trees, it shows whether they produce the same files, byte for byte. It uses only what the app
+ * had before crops could have padding, so it runs unchanged in an older tree.
  */
 
 import heicUrl from '../fixtures/gradient.heic?url';
@@ -34,7 +45,7 @@ type CaseReport = { name: string; ok: boolean; checks: Check[]; info: Record<str
 // Fixtures, all generated
 // ---------------------------------------------------------------------------
 
-function gradientCanvas(width: number, height: number, hole = false): OffscreenCanvas {
+function gradientCanvas(width: number, height: number, hole = false, blue = BLUE): OffscreenCanvas {
   const canvas = new OffscreenCanvas(width, height);
   const context = canvas.getContext('2d');
   if (!context) throw new Error('no 2d context');
@@ -45,7 +56,7 @@ function gradientCanvas(width: number, height: number, hole = false): OffscreenC
       const fy = (y + 0.5) / height;
       const inHole = hole && fx > HOLE.x0 && fx < HOLE.x1 && fy > HOLE.y0 && fy < HOLE.y1;
       image.data.set(
-        [Math.round(255 * fx), Math.round(255 * fy), BLUE, inHole ? 0 : 255],
+        [Math.round(255 * fx), Math.round(255 * fy), blue, inHole ? 0 : 255],
         (y * width + x) * 4,
       );
     }
@@ -404,6 +415,484 @@ async function checkFocal(file: File, spec: PlacementSpec): Promise<CaseReport> 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Padding
+// ---------------------------------------------------------------------------
+
+/**
+ * The colours of the padding checks. Every pixel of the fixture photo has PAD_PHOTO_BLUE of
+ * blue and the padding colour has 230, a difference of 198 out of 255. So no photo pixel is
+ * within 128 of the padding colour, anywhere in the photo, and none can pass for padding under
+ * any tolerance below.
+ */
+const PAD_PHOTO_BLUE = 32;
+const PADDING = '#1e50e6';
+const PADDING_RGB = [0x1e, 0x50, 0xe6] as const;
+const WHITE_RGB = [255, 255, 255] as const;
+
+/** PNG is lossless: its padding must be the colour exactly. */
+const PNG_PADDING_TOLERANCE = 0;
+/**
+ * JPG is lossy. More than JPG_EDGE_PX output pixels from the photo's edge, each channel of the
+ * padding must be within JPG_FAR_TOLERANCE of the colour. Within JPG_EDGE_PX of the edge a JPG
+ * smears colour across the edge (its blocks are up to 16 pixels wide), so there each channel
+ * must be within JPG_NEAR_TOLERANCE. Both are far below the 198 between photo and padding.
+ */
+const JPG_EDGE_PX = 16;
+const JPG_FAR_TOLERANCE = 4;
+const JPG_NEAR_TOLERANCE = 24;
+/** A photo pixel must be at least this far from the padding colour in blue. */
+const PHOTO_MIN_DIFFERENCE = 128;
+
+type PaddedCase = {
+  label: string;
+  /** The fixture photo's size. */
+  size: { width: number; height: number };
+  source: 'png' | 'jpeg';
+  spec: PlacementSpec;
+  format: 'jpg' | 'png';
+  /** The card's colour; without one the padding is white. */
+  background?: string;
+  /**
+   * How much of the way from the crop that fills the frame to the fit size the crop is: 1 is
+   * the whole photo, centred. Below 1 the crop can sit off-centre, and `slide` says where:
+   * 0 puts as much padding as allowed before the photo, 1 as much as allowed after it.
+   */
+  grow?: number;
+  slide?: number;
+};
+
+/** The padded crop for a case, in fractions of the photo, by plain arithmetic. */
+function paddedCrop(test: PaddedCase, target: { width: number; height: number }) {
+  const ratio = target.width / target.height;
+  const photoRatio = test.size.width / test.size.height;
+  // The crop that fills the frame, and the smallest crop that holds the whole photo.
+  const wider = photoRatio > ratio;
+  const fill = wider
+    ? { width: ratio / photoRatio, height: 1 }
+    : { width: 1, height: photoRatio / ratio };
+  const fit = wider
+    ? { width: 1, height: photoRatio / ratio }
+    : { width: ratio / photoRatio, height: 1 };
+  const grow = test.grow ?? 1;
+  const width = fill.width + (fit.width - fill.width) * grow;
+  const height = fill.height + (fit.height - fill.height) * grow;
+  /** Where a crop of `length` may start on an axis whose fit length is `fitLength`. */
+  const start = (length: number, fitLength: number) => {
+    const [min, max] =
+      length <= 1
+        ? [0, 1 - length]
+        : [Math.max(1 - length, (1 - fitLength) / 2), Math.min(0, (1 + fitLength) / 2 - length)];
+    return min + (max - min) * (test.slide ?? 0.5);
+  };
+  return { x: start(width, fit.width), y: start(height, fit.height), width, height };
+}
+
+type PhotoRect = { x: number; y: number; width: number; height: number };
+type Pixels = { width: number; height: number; data: Uint8ClampedArray };
+
+async function readPixels(blob: Blob): Promise<Pixels> {
+  const { width, height, context } = await decodeOutput(blob);
+  return { width, height, data: context.getImageData(0, 0, width, height).data };
+}
+
+/** The largest difference in red, green or blue between a pixel and a colour. */
+function colourDistance(pixels: Pixels, x: number, y: number, colour: readonly number[]): number {
+  const at = (y * pixels.width + x) * 4;
+  return Math.max(
+    Math.abs((pixels.data[at] as number) - (colour[0] as number)),
+    Math.abs((pixels.data[at + 1] as number) - (colour[1] as number)),
+    Math.abs((pixels.data[at + 2] as number) - (colour[2] as number)),
+  );
+}
+
+async function checkPadded(test: PaddedCase): Promise<CaseReport> {
+  const checks: Check[] = [];
+  const add = (name: string, ok: boolean, detail: string) => checks.push({ name, ok, detail });
+  const info: Record<string, unknown> = {};
+  const name = `padding: ${test.label} -> ${test.spec.platform} ${test.spec.placement}`;
+  try {
+    const target = test.spec.sizes[0];
+    if (!target) throw new Error('placement has no size');
+    // A JPG has no transparency, so only the PNG fixture has the transparent hole.
+    const hasHole = test.source === 'png';
+    const canvas = gradientCanvas(test.size.width, test.size.height, hasHole, PAD_PHOTO_BLUE);
+    const file =
+      test.source === 'png'
+        ? asFile(await canvas.convertToBlob({ type: 'image/png' }), 'padded.png')
+        : asFile(await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.95 }), 'padded.jpg');
+    const { asset, blob } = await importAsset(file);
+    const crop = paddedCrop(test, target);
+    const colour = test.background ? PADDING_RGB : WHITE_RGB;
+    // `background` is the card's colour. A version of the app without padding ignores it and
+    // trims the crop to the photo, and then the checks below fail.
+    const plan = planRender({
+      asset,
+      spec: test.spec,
+      edit: { crop, format: test.format },
+      background: test.background,
+    });
+    const result = await client.render(makeJob(file, blob, plan, test.source));
+    const pixels = await readPixels(result.blob);
+    info.crop = crop;
+    info.plannedPixels = plan.crop;
+    info.bytes = result.bytes;
+    add(
+      'decoded output size matches platforms.json',
+      pixels.width === target.width && pixels.height === target.height,
+      `${pixels.width} x ${pixels.height}, wanted ${target.width} x ${target.height}`,
+    );
+
+    // Where the photo should be in the output, from the crop alone. Rounding the crop to whole
+    // source pixels can move an edge by one output pixel, so one pixel either way is allowed.
+    const edges = {
+      left: (-crop.x / crop.width) * target.width,
+      right: ((1 - crop.x) / crop.width) * target.width,
+      top: (-crop.y / crop.height) * target.height,
+      bottom: ((1 - crop.y) / crop.height) * target.height,
+    };
+    const photo = {
+      left: Math.max(0, Math.round(edges.left)),
+      right: Math.min(target.width, Math.round(edges.right)),
+      top: Math.max(0, Math.round(edges.top)),
+      bottom: Math.min(target.height, Math.round(edges.bottom)),
+    };
+    info.photoExpectedAt = photo;
+    const paddingPixels =
+      target.width * target.height - (photo.right - photo.left) * (photo.bottom - photo.top);
+    add(
+      'the crop has padding',
+      paddingPixels > target.width,
+      `${paddingPixels} padding pixels expected around the photo at ${JSON.stringify(photo)}`,
+    );
+
+    const png = test.format === 'png';
+    const farTolerance = png ? PNG_PADDING_TOLERANCE : JPG_FAR_TOLERANCE;
+    const nearTolerance = png ? PNG_PADDING_TOLERANCE : JPG_NEAR_TOLERANCE;
+    /** Pixels this close to where the photo's edge should be are judged by neither rule. */
+    const slack = 1;
+    let worstFar = 0;
+    let worstNear = 0;
+    let badPadding = 0;
+    let firstBadPadding = '';
+    let notOpaque = 0;
+    let photoLikePadding = 0;
+    let firstPhotoLikePadding = '';
+    for (let y = 0; y < pixels.height; y++) {
+      for (let x = 0; x < pixels.width; x++) {
+        // How far outside the photo this pixel is; negative when it is inside.
+        const outside = Math.max(
+          photo.left - x,
+          x - (photo.right - 1),
+          photo.top - y,
+          y - (photo.bottom - 1),
+        );
+        const alpha = pixels.data[(y * pixels.width + x) * 4 + 3] as number;
+        if (outside > slack) {
+          const distance = colourDistance(pixels, x, y, colour);
+          const far = outside > JPG_EDGE_PX + slack;
+          if (far) worstFar = Math.max(worstFar, distance);
+          else worstNear = Math.max(worstNear, distance);
+          if (alpha !== 255) notOpaque += 1;
+          if (distance > (far ? farTolerance : nearTolerance)) {
+            badPadding += 1;
+            firstBadPadding ||= `(${x}, ${y}) is ${distance} from the colour`;
+          }
+        } else if (outside < -(png ? slack : JPG_EDGE_PX + slack) && alpha === 255) {
+          // Inside the photo (and, in a JPG, clear of the smeared edge): never the padding.
+          const blueGap = Math.abs(
+            (pixels.data[(y * pixels.width + x) * 4 + 2] as number) - (PADDING_RGB[2] as number),
+          );
+          const inHole = hasHole && !png && holeAt(x, y, crop, target);
+          if (!inHole && blueGap < PHOTO_MIN_DIFFERENCE) {
+            photoLikePadding += 1;
+            firstPhotoLikePadding ||= `(${x}, ${y}) is only ${blueGap} from the padding's blue`;
+          }
+        }
+      }
+    }
+    info.worstPaddingDifference = { far: worstFar, nearEdge: worstNear };
+    add(
+      png
+        ? 'every padding pixel is exactly the colour'
+        : `every padding pixel is the colour, within ${JPG_FAR_TOLERANCE} of 255 more than ` +
+            `${JPG_EDGE_PX} px from the photo and within ${JPG_NEAR_TOLERANCE} nearer`,
+      badPadding === 0 && notOpaque === 0,
+      badPadding === 0 && notOpaque === 0
+        ? `largest difference ${worstFar} away from the photo, ${worstNear} next to it`
+        : `${badPadding} wrong, ${notOpaque} not opaque; first: ${firstBadPadding}`,
+    );
+    add(
+      'no photo pixel is the padding colour',
+      test.background === undefined || photoLikePadding === 0,
+      photoLikePadding === 0 ? 'none' : `${photoLikePadding}; first: ${firstPhotoLikePadding}`,
+    );
+
+    // The seam: in a PNG the row or column of the photo right next to each strip of padding is
+    // pure photo (its blue is the fixture's, and it is the photo's own outermost row or column).
+    if (png) {
+      const seam: string[] = [];
+      const blueAt = (x: number, y: number) =>
+        pixels.data[(y * pixels.width + x) * 4 + 2] as number;
+      const channelAt = (x: number, y: number, c: number) =>
+        pixels.data[(y * pixels.width + x) * 4 + c] as number;
+      /** The first line of the photo from a padded edge: within the allowed pixel of `at`. */
+      const firstPhotoLine = (at: number, step: 1 | -1, vertical: boolean) => {
+        const mid = vertical
+          ? Math.round((photo.left + photo.right) / 2 / 4)
+          : Math.round((photo.top + photo.bottom) / 2 / 4);
+        for (const line of [at - step, at, at + step]) {
+          const blue = vertical ? blueAt(mid, line) : blueAt(line, mid);
+          if (Math.abs(blue - PAD_PHOTO_BLUE) <= 3) return line;
+        }
+        return null;
+      };
+      const sides = [
+        {
+          side: 'top',
+          padded: photo.top > 0,
+          at: photo.top,
+          step: 1 as const,
+          vertical: true,
+          channel: 1,
+          edge: 0,
+        },
+        {
+          side: 'bottom',
+          padded: photo.bottom < target.height,
+          at: photo.bottom - 1,
+          step: -1 as const,
+          vertical: true,
+          channel: 1,
+          edge: 255,
+        },
+        {
+          side: 'left',
+          padded: photo.left > 0,
+          at: photo.left,
+          step: 1 as const,
+          vertical: false,
+          channel: 0,
+          edge: 0,
+        },
+        {
+          side: 'right',
+          padded: photo.right < target.width,
+          at: photo.right - 1,
+          step: -1 as const,
+          vertical: false,
+          channel: 0,
+          edge: 255,
+        },
+      ];
+      for (const { side, padded, at, step, vertical, channel, edge } of sides) {
+        if (!padded) continue;
+        const line = firstPhotoLine(at, step, vertical);
+        if (line === null) {
+          seam.push(`${side}: no photo within a pixel of ${at}`);
+          continue;
+        }
+        // The line before it is padding, exactly; the line itself is the photo's own edge.
+        const from = vertical ? photo.left : photo.top;
+        const to = vertical ? photo.right : photo.bottom;
+        for (let i = from; i < to; i++) {
+          const [x, y] = vertical ? [i, line] : [line, i];
+          const [px, py] = vertical ? [i, line - step] : [line - step, i];
+          if (colourDistance(pixels, px, py, colour) !== 0) {
+            seam.push(`${side}: (${px}, ${py}) next to the photo is not exactly the colour`);
+            break;
+          }
+          if (Math.abs(blueAt(x, y) - PAD_PHOTO_BLUE) > 3 || channelAt(x, y, 3) !== 255) {
+            seam.push(`${side}: (${x}, ${y}) is not a pure photo pixel`);
+            break;
+          }
+          if (Math.abs(channelAt(x, y, channel) - edge) > TOLERANCE) {
+            seam.push(`${side}: (${x}, ${y}) is not the photo's own ${side} edge`);
+            break;
+          }
+        }
+      }
+      add(
+        'the photo starts exactly where the padding stops, at its own edge, with no seam',
+        seam.length === 0,
+        seam.length === 0 ? 'checked along every padded edge' : seam.join('; '),
+      );
+    }
+
+    // The transparent part of the photo: the colour in a JPG, still transparent in a PNG.
+    // The middle of the hole is the middle of the photo.
+    const holeX = Math.round(((0.5 - crop.x) / crop.width) * target.width);
+    const holeY = Math.round(((0.5 - crop.y) / crop.height) * target.height);
+    if (hasHole) {
+      const holeAlpha = pixels.data[(holeY * pixels.width + holeX) * 4 + 3] as number;
+      const holeDistance = colourDistance(pixels, holeX, holeY, colour);
+      add(
+        png
+          ? "the photo's transparent part is still transparent"
+          : "the photo's transparent part takes the colour",
+        png ? holeAlpha === 0 : holeAlpha === 255 && holeDistance <= JPG_FAR_TOLERANCE,
+        `at (${holeX}, ${holeY}): alpha ${holeAlpha}, ${holeDistance} from the colour`,
+      );
+    }
+
+    // Enlarged or not goes by the crop's whole size, padding included.
+    const cropPixels = {
+      width: crop.width * test.size.width,
+      height: crop.height * test.size.height,
+    };
+    const enlarged =
+      Math.round(cropPixels.width) < target.width || Math.round(cropPixels.height) < target.height;
+    add(
+      'the enlarged flag goes by the size of the crop, padding included',
+      result.upscaled === enlarged,
+      `crop of ${Math.round(cropPixels.width)} x ${Math.round(cropPixels.height)} px for ` +
+        `${target.width} x ${target.height}: expected ${String(enlarged)}, got ${String(result.upscaled)}`,
+    );
+  } catch (error) {
+    add(
+      'completed',
+      false,
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    );
+  }
+  return { name, ok: checks.every((c) => c.ok), checks, info };
+}
+
+/** True when an output pixel shows the fixture's hole, with a margin for its edge. */
+function holeAt(x: number, y: number, crop: PhotoRect, target: { width: number; height: number }) {
+  const fx = crop.x + ((x + 0.5) / target.width) * crop.width;
+  const fy = crop.y + ((y + 0.5) / target.height) * crop.height;
+  const margin = 0.05;
+  return (
+    fx > HOLE.x0 - margin && fx < HOLE.x1 + margin && fy > HOLE.y0 - margin && fy < HOLE.y1 + margin
+  );
+}
+
+function paddedCases(): PaddedCase[] {
+  const tall = placement('instagram', 'feed-vertical');
+  const wide = placement('instagram', 'feed-landscape');
+  const landscape = { width: 2400, height: 1800 };
+  const portrait = { width: 1800, height: 2400 };
+  return [
+    {
+      label: 'above and below, PNG',
+      size: landscape,
+      source: 'png',
+      spec: tall,
+      format: 'png',
+      background: PADDING,
+    },
+    {
+      label: 'above and below, JPG',
+      size: landscape,
+      source: 'png',
+      spec: tall,
+      format: 'jpg',
+      background: PADDING,
+    },
+    {
+      label: 'left and right, PNG',
+      size: portrait,
+      source: 'png',
+      spec: wide,
+      format: 'png',
+      background: PADDING,
+    },
+    {
+      label: 'left and right, JPG',
+      size: portrait,
+      source: 'png',
+      spec: wide,
+      format: 'jpg',
+      background: PADDING,
+    },
+    {
+      label: 'more below than above, PNG',
+      size: landscape,
+      source: 'png',
+      spec: tall,
+      format: 'png',
+      background: PADDING,
+      grow: 0.6,
+      slide: 0,
+    },
+    {
+      label: 'JPG photo, above and below, PNG',
+      size: landscape,
+      source: 'jpeg',
+      spec: tall,
+      format: 'png',
+      background: PADDING,
+    },
+    {
+      label: 'small photo, enlarged, PNG',
+      size: { width: 600, height: 450 },
+      source: 'png',
+      spec: tall,
+      format: 'png',
+      background: PADDING,
+    },
+    { label: 'no colour: white, JPG', size: landscape, source: 'png', spec: tall, format: 'jpg' },
+  ];
+}
+
+// ---------------------------------------------------------------------------
+// Comparing the output of two versions of the app
+// ---------------------------------------------------------------------------
+
+async function sha256(blob: Blob): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Renders ordinary cards (no colour, crop inside the photo) and returns each output file's
+ * size and checksum, by name: four fixtures, three placements, the automatic crop and one crop
+ * touching each edge of the photo, as JPG and as PNG.
+ */
+async function renderForComparison(): Promise<Record<string, string>> {
+  const worker = createImageWorkerClient();
+  const fixtures: [string, File, RenderJob['sourceFormat']][] = [
+    ['JPG', await jpgFixture(), 'jpeg'],
+    ['transparent PNG', await pngFixture(), 'png'],
+    ['EXIF-rotated JPG', await rotatedJpgFixture(), 'jpeg'],
+    ['HEIC', await heicFixture(), 'heic'],
+  ];
+  const specs = [...PLACEMENTS(), placement('instagram', 'feed-landscape')];
+  const files: Record<string, string> = {};
+  for (const [label, file, sourceFormat] of fixtures) {
+    const { asset, blob } = await importAsset(file);
+    for (const spec of specs) {
+      const target = spec.sizes[0];
+      if (!target) throw new Error('placement has no size');
+      const ratio = target.width / target.height;
+      const photoRatio = asset.width / asset.height;
+      // Half the size of the crop that fills the frame, so there is room to touch each edge.
+      const half =
+        photoRatio > ratio
+          ? { width: ratio / photoRatio / 2, height: 0.5 }
+          : { width: 0.5, height: photoRatio / ratio / 2 };
+      const crops: [string, { x: number; y: number; width: number; height: number } | null][] = [
+        ['automatic', null],
+        ['left edge', { x: 0, y: 0.2, ...half }],
+        ['top edge', { x: 0.2, y: 0, ...half }],
+        ['right edge', { x: 1 - half.width, y: 0.3, ...half }],
+        ['bottom edge', { x: 0.3, y: 1 - half.height, ...half }],
+      ];
+      for (const [cropName, crop] of crops) {
+        for (const format of ['jpg', 'png'] as const) {
+          const plan = planRender({ asset, spec, edit: crop ? { crop, format } : { format } });
+          const result = await worker.render(makeJob(file, blob, plan, sourceFormat));
+          files[`${label} | ${spec.platform} ${spec.placement} | ${cropName} | ${format}`] =
+            `${result.bytes} bytes ${await sha256(result.blob)}`;
+        }
+      }
+    }
+  }
+  worker.dispose();
+  return files;
+}
+
 async function toDataUrl(blob: Blob): Promise<string> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -522,6 +1011,7 @@ async function runAll(options: { large?: boolean } = {}) {
     reports.push(await checkRender('HEIC', heic, 'heic', spec));
     reports.push(await checkFocal(jpg, spec));
   }
+  for (const test of paddedCases()) reports.push(await checkPadded(test));
   if (options.large) {
     const large = await checkLarge(vertical);
     reports.push(large.report);
@@ -531,4 +1021,9 @@ async function runAll(options: { large?: boolean } = {}) {
   return { ok: reports.every((report) => report.ok), reports, images };
 }
 
-(window as unknown as { runImageWorkerChecks: typeof runAll }).runImageWorkerChecks = runAll;
+const hooks = window as unknown as {
+  runImageWorkerChecks: typeof runAll;
+  renderForComparison: typeof renderForComparison;
+};
+hooks.runImageWorkerChecks = runAll;
+hooks.renderForComparison = renderForComparison;

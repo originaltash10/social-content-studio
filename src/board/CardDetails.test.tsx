@@ -175,11 +175,23 @@ describe('the file type and quality', () => {
     open(false);
     expect(screen.queryByRole('group', { name: 'File type' })).toBeNull();
     expect(screen.queryByRole('slider')).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Background colour' })).toBeNull();
   });
 
   it('are not shown for a card that is not a single image', () => {
     open(true, { slides: [], coverIndex: 0 });
     expect(screen.queryByRole('group', { name: 'File type' })).toBeNull();
+    expect(screen.queryByRole('group', { name: 'Background colour' })).toBeNull();
+  });
+
+  it('come after the background colour, which every card the editor can open has', () => {
+    open(true);
+    const colour = screen.getByRole('group', { name: 'Background colour' });
+    const fileType = screen.getByRole('group', { name: 'File type' });
+    expect(
+      colour.compareDocumentPosition(fileType) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(colour).toHaveTextContent("Fills any space where the crop goes past the photo's edges.");
   });
 });
 

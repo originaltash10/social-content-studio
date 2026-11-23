@@ -50,6 +50,12 @@ describe('exportTarget', () => {
     expect(target.plan.target).toEqual(getPlacement('instagram', 'feed-vertical')?.sizes[0]);
   });
 
+  it("plans with the card's background colour, and white for a card with none", () => {
+    expect(ok(exportTarget(makeCard(), session(), lookups)).plan.background).toBe('#ffffff');
+    const green = makeCard({ background: '#0a7f5c' });
+    expect(ok(exportTarget(green, session(), lookups)).plan.background).toBe('#0a7f5c');
+  });
+
   it.each([
     ['more than one photo', makeCard({ assetIds: [PHOTO.id, hash('c')] })],
     [
@@ -124,6 +130,12 @@ describe('sameFile', () => {
       ),
     );
     expect(sameFile(a, moved)).toBe(false);
+    // A different background colour is a different file.
+    const coloured = ok(exportTarget(makeCard({ background: '#0a7f5c' }), session(), lookups));
+    expect(sameFile(a, coloured)).toBe(false);
+    expect(
+      sameFile(coloured, ok(exportTarget(makeCard({ background: '#0A7F5C' }), session(), lookups))),
+    ).toBe(true);
     expect(sameFile(a, { ...a, asset: { ...a.asset, id: hash('d') } })).toBe(false);
   });
 });

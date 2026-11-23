@@ -2,7 +2,7 @@ import { makeAsset } from '../../test/fixtures';
 import type { PlacementSpec } from '../../types';
 import { platforms } from '../platforms';
 import { validate } from '../validate';
-import { focalInFrame } from './crop';
+import { PADDING_TOLERANCE, centredOnPhoto, cropToPixels, fitSize, focalInFrame } from './crop';
 import {
   DEFAULT_QUALITY,
   MAX_SOURCE_PIXELS,
@@ -151,6 +151,75 @@ describe('planRender', () => {
     expect(plan.crop.x).toBeGreaterThanOrEqual(2016);
     expect(plan.crop.y).toBeGreaterThanOrEqual(1512);
     expect(plan.crop.width / plan.crop.height).toBeCloseTo(target.width / target.height, 2);
+  });
+
+  describe.each(sources)(
+    'a saved crop that breaks the crop limits, on a $width x $height photo',
+    (source) => {
+      const photo = makeAsset(source);
+
+      it.each(imagePlacements.map((spec) => [name(spec), spec] as const))(
+        'is rendered corrected for %s, and the card is left as it was',
+        (_name, spec) => {
+          const ratio = targetSize(spec).width / targetSize(spec).height;
+          const frame = centredOnPhoto(fitSize(source, ratio));
+          // Three times the fit size and far off to one side; and, where the fit size has
+          // padding, the fit size itself placed off-centre.
+          const tooLarge = { x: -3, y: 2.5, width: frame.width * 3, height: frame.height * 3 };
+          const offCentre = { ...frame, x: frame.x + 0.4, y: frame.y - 0.4 };
+          const hasPadding = Math.max(frame.width, frame.height) > 1 + PADDING_TOLERANCE;
+          const stored = hasPadding ? [tooLarge, offCentre] : [tooLarge];
+          for (const crop of stored) {
+            const edit = Object.freeze({ crop: Object.freeze({ ...crop }) });
+            const plan = planRender({ asset: photo, spec, edit });
+            // The corrected crop is the fit frame: the whole photo, centred.
+            expect(plan.cropRect.x).toBeCloseTo(frame.x, 12);
+            expect(plan.cropRect.y).toBeCloseTo(frame.y, 12);
+            expect(plan.cropRect.width).toBeCloseTo(frame.width, 12);
+            expect(plan.cropRect.height).toBeCloseTo(frame.height, 12);
+            expect(plan.crop).toEqual(cropToPixels(frame, source));
+            // The pixels hold the whole photo.
+            expect(plan.crop.x).toBeLessThanOrEqual(0);
+            expect(plan.crop.y).toBeLessThanOrEqual(0);
+            expect(plan.crop.x + plan.crop.width).toBeGreaterThanOrEqual(source.width);
+            expect(plan.crop.y + plan.crop.height).toBeGreaterThanOrEqual(source.height);
+            // Planning only reads the card's edit: the stored crop is the same four numbers.
+            expect(edit.crop).toEqual(crop);
+          }
+        },
+      );
+    },
+  );
+
+  it('plans a crop with padding as it is stored, in pixels that reach past the photo', () => {
+    // A square from the 4000 x 3000 photo, showing all of it: 500 px of padding above and below.
+    const square = first(
+      imagePlacements.filter((spec) => targetSize(spec).width === targetSize(spec).height),
+    );
+    const photo = makeAsset({ width: 4000, height: 3000 });
+    const crop = { x: 0, y: -1 / 6, width: 1, height: 4 / 3 };
+    const plan = planRender({ asset: photo, spec: square, edit: { crop } });
+    expect(plan.crop).toEqual({ x: 0, y: -500, width: 4000, height: 4000 });
+    expect(plan.target).toEqual(targetSize(square));
+    // Enlarged or not is worked out from the crop's size, padding included.
+    expect(plan.upscaled).toBe(targetSize(square).width > 4000);
+  });
+
+  it("carries the card's background colour, in lowercase, and white without a usable one", () => {
+    expect(planRender({ asset, spec: anyImage }).background).toBe('#ffffff');
+    expect(planRender({ asset, spec: anyImage, background: undefined }).background).toBe('#ffffff');
+    expect(planRender({ asset, spec: anyImage, background: '#0A7F5C' }).background).toBe('#0a7f5c');
+    for (const unusable of ['0a7f5c', '#0af', '#0a7f5cff', 'white', '']) {
+      expect(planRender({ asset, spec: anyImage, background: unusable }).background).toBe(
+        '#ffffff',
+      );
+    }
+  });
+
+  it('plans the same crop, size, format and quality whatever the colour', () => {
+    const plain = planRender({ asset, spec: anyImage });
+    const coloured = planRender({ asset, spec: anyImage, background: '#0a7f5c' });
+    expect({ ...coloured, background: plain.background }).toEqual(plain);
   });
 
   it('defaults to JPG at the default quality', () => {

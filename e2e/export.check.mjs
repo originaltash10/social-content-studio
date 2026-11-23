@@ -35,6 +35,11 @@
  * - every request stays under the app's own address, with no failed requests and no console
  *   errors.
  *
+ * Then, in a new session, padding (`runPaddingExport`): a card is given the Fit whole photo crop
+ * and a background colour typed into the hex box, and exported as a zip. The exported JPG has
+ * the colour in every padding pixel (within the JPG tolerances in e2e/paddingPixels.mjs), and
+ * the same card exported as a PNG has it exactly; both are still clean files at their size.
+ *
  * Like the other checks in this folder, it needs Playwright with Chromium already installed on
  * the machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is
  * written inside the repository except the normal `dist` build.
@@ -45,6 +50,8 @@ import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { describePadding, measurePadding, paddingOk, rgbOf } from './paddingPixels.mjs';
 
 import { controlWorkers } from './workerHold.mjs';
 
@@ -814,11 +821,214 @@ async function runExportCheck(browser, name, url) {
     );
     await exportRegion.screenshot({ path: join(outDir, `${name}-export.png`) });
   } catch (error) {
-    check('the check ran to the end', false, String(error).split('\n')[0]);
+    // A timeout's first line does not say which step stalled. Playwright names what it was
+    // waiting for on a later line, wrapped in terminal colour codes, which are cut off here.
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
   } finally {
     await context.close();
   }
   console.log(`  ${checks.filter((c) => c.ok).length} of ${checks.length} checks passed`);
+  return checks.every((c) => c.ok);
+}
+
+// --------------------------------------------------------------------------- padding
+
+/**
+ * The background colour of the padded card. It is at least 128 away, in some channel, from
+ * every colour in the test photo (its gradient, its white circle and its dark rectangle), so no
+ * pixel of the photo can pass for padding.
+ */
+const PADDING_COLOUR = '#00ffff';
+/** How long to wait for a control that only this feature has: see e2e/editor.check.mjs. */
+const NEW_CONTROL_MS = 5_000;
+
+/** The whole 4032 x 3024 test photo in the Feed vertical shape, centred, by plain arithmetic. */
+function fitWholeFeed() {
+  const size = FEED.sizes[0];
+  const ratio = size.width / size.height;
+  const photoRatio = 4032 / 3024;
+  const wide = photoRatio > ratio;
+  const width = wide ? 1 : ratio / photoRatio;
+  const height = wide ? photoRatio / ratio : 1;
+  return { x: (1 - width) / 2, y: (1 - height) / 2, width, height };
+}
+
+async function runPaddingExport(browser, name, url) {
+  console.log(`\n== Export check, padding and background colour: ${name} (${url})`);
+  const context = await browser.newContext({ acceptDownloads: true });
+  const problems = [];
+  context.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+  });
+  context.on('requestfailed', (request) => problems.push(`request failed: ${request.url()}`));
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  page.on('dialog', (dialog) => dialog.accept());
+
+  const checks = [];
+  const check = (title, ok, detail = '') => {
+    checks.push({ title, ok, detail });
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${title}${detail ? `: ${detail}` : ''}`);
+  };
+  /** Runs one step. If it cannot be carried out, that is its failure, and the next step runs. */
+  const step = async (title, run) => {
+    try {
+      await run(title);
+    } catch (error) {
+      const lines = String(error).split('\n');
+      const call = lines.find((line) => line.includes('- waiting for '));
+      const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+      check(title, false, waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''));
+    }
+  };
+
+  const dialog = page.getByRole('dialog');
+  const zipButton = page.getByRole('button', { name: 'Download as .zip' });
+  const waitForRendered = () =>
+    page
+      .getByRole('status', { name: 'Render progress' })
+      .filter({ hasText: /^Rendered 1 card: / })
+      .waitFor({ timeout: 60_000 });
+  const closeDialog = async () => {
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+    await waitForRendered();
+  };
+  const FIT = fitWholeFeed();
+  const size = FEED.sizes[0];
+
+  /** Downloads the zip and returns its one image: path, bytes, and what an inspection finds. */
+  async function exportedImage(tag) {
+    const [download] = await Promise.all([page.waitForEvent('download'), zipButton.click()]);
+    const path = join(outDir, `${name}-padding-${tag}.zip`);
+    await download.saveAs(path);
+    await page.getByRole('region', { name: 'Export results' }).waitFor({ timeout: 60_000 });
+    const zip = await JSZip.loadAsync(readFileSync(path));
+    const entries = Object.entries(zip.files).filter(
+      ([entry, file]) => !file.dir && entry !== 'captions.csv',
+    );
+    const [entry, file] = entries[0] ?? [];
+    const bytes = file ? Buffer.from(await file.async('uint8array')) : null;
+    return {
+      count: entries.length,
+      entry,
+      bytes,
+      inspected: bytes ? await inspectImage(page, entry, bytes) : null,
+      padding: bytes
+        ? await measurePadding(
+            page,
+            { base64: bytes.toString('base64') },
+            FIT,
+            rgbOf(PADDING_COLOUR),
+          )
+        : null,
+    };
+  }
+  const cleanAtSize = (image, type) =>
+    image.count === 1 &&
+    image.inspected?.type === type &&
+    image.inspected.extensionMatches &&
+    image.inspected.sizeOk &&
+    image.inspected.findings.length === 0 &&
+    image.padding.width === size.width &&
+    image.padding.height === size.height;
+
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.getByLabel('Name').fill(SESSION_NAME);
+    await page.getByRole('button', { name: 'New session' }).click();
+    // The system's file picker cannot be driven, so the file is given to the input directly.
+    await page.getByLabel('Photos to import').setInputFiles({
+      name: PHOTO,
+      mimeType: 'image/jpeg',
+      buffer: await makePhoto(page),
+    });
+    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+    await page.getByRole('button', { name: 'Create cards' }).click();
+    const form = page.getByRole('form', { name: 'Create cards' });
+    await form.getByRole('checkbox', { name: /^Feed vertical \(/ }).check();
+    await form.getByRole('button', { name: 'Create' }).click();
+    await waitForRendered();
+
+    // 1. Fit whole photo and a colour, with real clicks and typing, then the zip.
+    await step(
+      'a card with the Fit whole photo crop and a colour exports as a JPG padded in that colour',
+      async (title) => {
+        await page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true }).click();
+        await dialog.getByRole('application').waitFor({ timeout: 60_000 });
+        await dialog
+          .getByRole('button', { name: 'Fit whole photo', exact: true })
+          .click({ timeout: NEW_CONTROL_MS });
+        const hex = dialog.getByRole('textbox', { name: 'Hex code' });
+        await hex.click();
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type(PADDING_COLOUR);
+        await page.keyboard.press('Enter');
+        await closeDialog();
+        const image = await exportedImage('jpg');
+        check(
+          title,
+          cleanAtSize(image, 'jpg') && paddingOk(image.padding),
+          `${image.entry}: ${describePadding(image.padding)}; hidden data: ${JSON.stringify(image.inspected.findings)}`,
+        );
+      },
+    );
+
+    // 2. The same card as a PNG: lossless, so the padding is the colour exactly.
+    await step(
+      'the same card exports as a PNG whose padding is exactly that colour',
+      async (title) => {
+        // If the step before could not finish, it left the card open: start from the board.
+        if (await dialog.isVisible()) await closeDialog();
+        await page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true }).click();
+        await dialog.getByRole('application').waitFor({ timeout: 60_000 });
+        await dialog
+          .getByRole('textbox', { name: 'Hex code' })
+          .waitFor({ timeout: NEW_CONTROL_MS });
+        await dialog
+          .getByRole('group', { name: 'File type' })
+          .getByRole('radio', { name: 'PNG' })
+          .check();
+        await closeDialog();
+        const image = await exportedImage('png');
+        check(
+          title,
+          cleanAtSize(image, 'png') &&
+            paddingOk(image.padding) &&
+            image.padding.worstFar === 0 &&
+            image.padding.worstNear === 0,
+          `${image.entry}: ${describePadding(image.padding)}; hidden data: ${JSON.stringify(image.inspected.findings)}`,
+        );
+      },
+    );
+
+    check('no failed requests and no console errors', problems.length === 0, problems.join(' | '));
+    writeFileSync(
+      join(outDir, `${name}-padding-report.json`),
+      JSON.stringify({ checks, problems }, null, 2),
+    );
+  } catch (error) {
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
+  } finally {
+    await context.close();
+  }
   return checks.every((c) => c.ok);
 }
 
@@ -830,6 +1040,7 @@ try {
   const devUrl = `http://localhost:${PORTS.dev}/`;
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, devUrl);
   failed = !(await runExportCheck(browser, 'dev', devUrl)) || failed;
+  failed = !(await runPaddingExport(browser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -844,6 +1055,7 @@ try {
     siteUrl,
   );
   failed = !(await runExportCheck(browser, 'production', siteUrl)) || failed;
+  failed = !(await runPaddingExport(browser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);

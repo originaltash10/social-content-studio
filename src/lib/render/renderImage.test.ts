@@ -1,10 +1,12 @@
 import { makeAsset } from '../../test/fixtures';
 import { platforms } from '../platforms';
-import { isImagePlacement, planRender } from './plan';
+import { DEFAULT_BACKGROUND } from './background';
+import { centredOnPhoto, fitSize, focalCrop } from './crop';
+import { isImagePlacement, planRender, targetSize } from './plan';
 import type { RenderPlan } from './plan';
 import { RenderError } from './protocol';
 import type { RenderJob, RenderStage } from './protocol';
-import { JPG_BACKGROUND, browserDeps, createImageRenderer } from './renderImage';
+import { browserDeps, createImageRenderer } from './renderImage';
 import type { RenderCanvas, RenderDeps } from './renderImage';
 
 const spec = platforms.placements.find(isImagePlacement);
@@ -145,7 +147,7 @@ describe('decoding and drawing', () => {
         target.height,
       ]);
       expect(canvases[0]?.calls).toEqual([
-        ['fillStyle', JPG_BACKGROUND],
+        ['fillStyle', DEFAULT_BACKGROUND],
         ['fillRect', 0, 0, target.width, target.height],
         ['imageSmoothingEnabled', true],
         ['imageSmoothingQuality', 'high'],
@@ -164,6 +166,148 @@ describe('decoding and drawing', () => {
       ]);
     },
   );
+});
+
+describe('a crop inside the photo, on a card with no colour', () => {
+  const imagePlacements = platforms.placements.filter(isImagePlacement);
+  const photos = [
+    { width: 4032, height: 3024 },
+    { width: 3024, height: 4032 },
+    { width: 2000, height: 2000 },
+    { width: 640, height: 480 },
+  ];
+
+  /** Crops inside the photo: the automatic ones, and one touching each edge in turn. */
+  function insideCrops(source: { width: number; height: number }, ratio: number) {
+    const fill = focalCrop(source, ratio, { x: 0.5, y: 0.5 });
+    const half = { width: fill.width / 2, height: fill.height / 2 };
+    return [
+      undefined,
+      focalCrop(source, ratio, { x: 0, y: 0 }),
+      focalCrop(source, ratio, { x: 1, y: 1 }),
+      { x: 0, y: 0.21, ...half },
+      { x: 0.17, y: 0, ...half },
+      { x: 1 - half.width, y: 0.33, ...half },
+      { x: 0.29, y: 1 - half.height, ...half },
+      { x: 0, y: 0, ...half },
+      { x: 1 - half.width, y: 1 - half.height, ...half },
+      { x: 0.123, y: 0.234, ...half },
+      { x: 0, y: 0, width: 1, height: 1 },
+    ];
+  }
+
+  describe.each(photos)('from a $width x $height photo', (source) => {
+    it.each(imagePlacements.map((s) => [`${s.platform} ${s.placement}`, s] as const))(
+      'makes exactly the canvas calls it made before padding: %s',
+      async (_name, placement) => {
+        const photo = makeAsset({ ...source, focal: { x: 0.5, y: 0.5 } });
+        const size = targetSize(placement);
+        for (const cropRect of insideCrops(source, size.width / size.height)) {
+          for (const format of ['jpg', 'png'] as const) {
+            const plan = planRender({
+              asset: photo,
+              spec: placement,
+              edit: cropRect ? { crop: cropRect, format } : { format },
+            });
+            const full = fakeBitmap(source.width, source.height);
+            const { deps, canvases } = setup({
+              decode: () => full,
+              encoded: new Blob(['bytes'], { type: format === 'jpg' ? 'image/jpeg' : 'image/png' }),
+            });
+            await createImageRenderer(deps)(makeJob({ plan }));
+            // The crop is whole pixels inside the photo, as it always was.
+            expect(plan.crop.x).toBeGreaterThanOrEqual(0);
+            expect(plan.crop.y).toBeGreaterThanOrEqual(0);
+            expect(plan.crop.x + plan.crop.width).toBeLessThanOrEqual(source.width);
+            expect(plan.crop.y + plan.crop.height).toBeLessThanOrEqual(source.height);
+            // The calls the renderer made before this feature, in the same order: a white fill
+            // for a JPG and none for a PNG, then the crop drawn onto the whole output.
+            expect(canvases[0]?.calls).toEqual([
+              ...(format === 'jpg'
+                ? [
+                    ['fillStyle', '#ffffff'],
+                    ['fillRect', 0, 0, size.width, size.height],
+                  ]
+                : []),
+              ['imageSmoothingEnabled', true],
+              ['imageSmoothingQuality', 'high'],
+              [
+                'drawImage',
+                full,
+                plan.crop.x,
+                plan.crop.y,
+                plan.crop.width,
+                plan.crop.height,
+                0,
+                0,
+                size.width,
+                size.height,
+              ],
+            ]);
+          }
+        }
+      },
+    );
+  });
+});
+
+describe('a crop with padding', () => {
+  // A 4000 x 3000 photo shown whole in a square: 500 source pixels of padding above and below.
+  const square = platforms.placements
+    .filter(isImagePlacement)
+    .find((s) => targetSize(s).width === targetSize(s).height);
+  if (!square) throw new Error('platforms.json has no square image placement');
+  const side = targetSize(square).width;
+  const photo = makeAsset({ width: 4000, height: 3000 });
+  const whole = centredOnPhoto(fitSize(photo, 1));
+  const padded = (format: 'jpg' | 'png', background?: string) =>
+    planRender({ asset: photo, spec: square, edit: { crop: whole, format }, background });
+  /** Where the photo lands: three quarters of the height, in the middle. */
+  const top = Math.round(side / 8);
+  const bottom = Math.round((side * 7) / 8);
+
+  async function callsFor(plan: RenderPlan) {
+    const full = fakeBitmap(4000, 3000);
+    const { deps, canvases } = setup({
+      decode: () => full,
+      encoded: new Blob(['bytes'], { type: plan.format === 'jpg' ? 'image/jpeg' : 'image/png' }),
+    });
+    await createImageRenderer(deps)(makeJob({ plan }));
+    return { calls: canvases[0]?.calls ?? [], full };
+  }
+
+  it('reads only the photo itself, and draws it between the padding', async () => {
+    const plan = padded('jpg', '#0a7f5c');
+    expect(plan.crop).toEqual({ x: 0, y: -500, width: 4000, height: 4000 });
+    const { calls, full } = await callsFor(plan);
+    expect(calls.at(-1)).toEqual(['drawImage', full, 0, 0, 4000, 3000, 0, top, side, bottom - top]);
+  });
+
+  it('JPG: fills the whole picture with the colour first', async () => {
+    const { calls } = await callsFor(padded('jpg', '#0a7f5c'));
+    expect(calls.slice(0, 2)).toEqual([
+      ['fillStyle', '#0a7f5c'],
+      ['fillRect', 0, 0, side, side],
+    ]);
+    expect(calls.filter((call) => call[0] === 'fillRect')).toHaveLength(1);
+  });
+
+  it('PNG: fills only the padding, and its edges are the edges the photo is drawn to', async () => {
+    const { calls } = await callsFor(padded('png', '#0a7f5c'));
+    expect(calls.slice(0, 3)).toEqual([
+      ['fillStyle', '#0a7f5c'],
+      ['fillRect', 0, 0, side, top],
+      ['fillRect', 0, bottom, side, side - bottom],
+    ]);
+    expect(calls.filter((call) => call[0] === 'fillRect')).toHaveLength(2);
+  });
+
+  it('uses white when the card has no colour', async () => {
+    for (const format of ['jpg', 'png'] as const) {
+      const { calls } = await callsFor(padded(format));
+      expect(calls[0]).toEqual(['fillStyle', '#ffffff']);
+    }
+  });
 });
 
 describe('the size check', () => {

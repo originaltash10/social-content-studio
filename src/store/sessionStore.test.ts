@@ -9,7 +9,7 @@ import {
 } from './sessionStore';
 import type { NewCard } from './sessionStore';
 import { hash, makeAsset, makeBrand, makeCard, makeImageEdit, makeSession } from '../test/fixtures';
-import type { Card, Session, ValidationResult } from '../types';
+import type { Card, ImageEdit, Session, ValidationResult } from '../types';
 
 const store = () => useSessionStore.getState();
 
@@ -390,6 +390,43 @@ describe('duplicateCard', () => {
     id = store().addCard(newCard({ status: 'approved', overrideFail: true }));
   });
 
+  it('copies the background colour', () => {
+    store().updateCard(id, (card) => {
+      card.background = '#0a7f5c';
+    });
+    const copyId = store().duplicateCard(id);
+    if (!copyId) throw new Error('expected a new card id');
+    expect(cardById(copyId).background).toBe('#0a7f5c');
+    // Each card keeps its own: changing the copy's leaves the source's alone, and the reverse.
+    store().updateCard(copyId, (card) => {
+      card.background = '#000000';
+    });
+    expect(cardById(id).background).toBe('#0a7f5c');
+    store().updateCard(id, (card) => {
+      delete card.background;
+    });
+    expect(cardById(copyId).background).toBe('#000000');
+  });
+
+  it('gives the copy no background colour when the source has none', () => {
+    store().updateCard(id, (card) => {
+      delete card.background;
+    });
+    const copyId = store().duplicateCard(id);
+    if (!copyId) throw new Error('expected a new card id');
+    expect(Object.hasOwn(cardById(copyId), 'background')).toBe(false);
+  });
+
+  it('copies a crop with padding as it is', () => {
+    const crop = { x: 0, y: -1 / 6, width: 1, height: 4 / 3 };
+    store().updateCard(id, (card) => {
+      if ('format' in card.edit) card.edit.crop = crop;
+    });
+    const copyId = store().duplicateCard(id);
+    if (!copyId) throw new Error('expected a new card id');
+    expect((cardById(copyId).edit as ImageEdit).crop).toEqual(crop);
+  });
+
   it('copies edit and copy, sets parentId, and increments version', () => {
     const copyId = store().duplicateCard(id);
     if (!copyId) throw new Error('expected a new card id');
@@ -683,6 +720,53 @@ describe('undo', () => {
     });
     expect(store().undo()).toBe(true);
     expect(cardById(id)).toEqual(before);
+  });
+
+  it('reverts a change of background colour, to the colour before or to none', () => {
+    store().updateCard(id, (card) => {
+      delete card.background;
+    });
+    const none = cardById(id);
+    store().updateCard(id, (card) => {
+      card.background = '#0a7f5c';
+    });
+    const green = cardById(id);
+    // The snapshot the step holds is the whole card as it was, colour included.
+    expect(store().undoStack.at(-1)).toEqual({ cardId: id, before: none });
+    store().updateCard(id, (card) => {
+      card.background = '#000000';
+    });
+    expect(store().undoStack.at(-1)).toEqual({ cardId: id, before: green });
+    expect(store().undo()).toBe(true);
+    expect(cardById(id).background).toBe('#0a7f5c');
+    expect(store().undo()).toBe(true);
+    expect(cardById(id)).toBe(none);
+    expect(Object.hasOwn(cardById(id), 'background')).toBe(false);
+  });
+
+  it('reverts a crop with padding and a colour set in one change together', () => {
+    const before = cardById(id);
+    store().updateCard(id, (card) => {
+      card.background = '#0a7f5c';
+      if ('format' in card.edit) card.edit.crop = { x: 0, y: -1 / 6, width: 1, height: 4 / 3 };
+    });
+    expect((cardById(id).edit as ImageEdit).crop.y).toBe(-1 / 6);
+    expect(store().undo()).toBe(true);
+    expect(cardById(id)).toBe(before);
+  });
+
+  it('keeps the background colour of a card re-cropped by a focal point move, and on its undo', () => {
+    store().addAssets([{ asset: makeAsset() }]);
+    store().updateCard(id, (card) => {
+      card.background = '#1a2b3c';
+    });
+    const before = cardById(id);
+    const crop = { x: 0.1, y: 0, width: 0.6, height: 1 };
+    store().setAssetFocal(hash('a'), { x: 0.4, y: 0.5 }, [{ cardId: id, crop }]);
+    expect(cardById(id).background).toBe('#1a2b3c');
+    expect((cardById(id).edit as ImageEdit).crop).toEqual(crop);
+    expect(store().undo()).toBe(true);
+    expect(cardById(id)).toBe(before);
   });
 
   it('reverts updates one at a time, newest first', () => {

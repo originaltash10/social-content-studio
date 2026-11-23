@@ -20,10 +20,11 @@ describe('isTyping', () => {
     expect(isTyping(editable)).toBe(true);
   });
 
-  it('is false for a checkbox, a radio button and a slider, which hold no text', () => {
+  it('is false for a checkbox, a radio button, a slider and a colour picker, which hold no text', () => {
     expect(isTyping(input('checkbox'))).toBe(false);
     expect(isTyping(input('radio'))).toBe(false);
     expect(isTyping(input('range'))).toBe(false);
+    expect(isTyping(input('color'))).toBe(false);
   });
 
   it('is false for anything else', () => {

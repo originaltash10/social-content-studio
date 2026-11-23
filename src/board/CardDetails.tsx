@@ -7,9 +7,9 @@
  * export unless overridden"). It stays visible while the override is ticked, so it can always be
  * unticked, even after the card stops failing.
  *
- * A card the editor can open also shows its file type (JPG or PNG) and JPG quality. A card
- * without the editor (its photo is not in the session, or it is not a single-photo card) cannot
- * be made into a file, so it has no file settings to change either.
+ * A card the editor can open also shows its background colour, then its file type (JPG or PNG)
+ * and JPG quality. A card without the editor (its photo is not in the session, or it is not a
+ * single-photo card) cannot be made into a file, so it has no file settings to change either.
  */
 
 import type { ReactNode } from 'react';
@@ -29,6 +29,8 @@ import { isImageEdit } from '../lib/board/renderValidation';
 import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
+import { backgroundOf } from '../lib/render/background';
+import { BackgroundControls } from './BackgroundControls';
 import type { DialogUndo } from './dialogUndo';
 import { FileTypeControls } from './FileTypeControls';
 import { UPDATING_TEXT, useLastDone } from './lastDone';
@@ -48,6 +50,8 @@ export type CardDetailsProps = {
   editor?: ReactNode;
   /** The dialog's undo; each change made here is recorded as one of the dialog's steps. */
   undo?: DialogUndo;
+  /** Hears the colour being tried in the colour picker, or null when none is. */
+  onBackgroundPreview?: (colour: string | null) => void;
 };
 
 /** Without a dialog undo, a change is simply made. */
@@ -70,6 +74,7 @@ export function CardDetails({
   headingId,
   editor,
   undo,
+  onBackgroundPreview,
 }: CardDetailsProps) {
   const record = undo?.record ?? runChange;
   const done = render?.kind === 'done' ? render : null;
@@ -140,7 +145,15 @@ export function CardDetails({
           </section>
 
           {editor !== undefined && isImageEdit(card.edit) && (
-            <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
+            <>
+              <BackgroundControls
+                cardId={card.id}
+                background={backgroundOf(card)}
+                record={record}
+                onPreview={onBackgroundPreview}
+              />
+              <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
+            </>
           )}
 
           {(card.validation.level === 'fail' || card.overrideFail) && (

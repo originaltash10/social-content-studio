@@ -171,6 +171,11 @@ export function Board({
     setDialogUndo(createDialogUndo());
   }
 
+  // The colour being tried in the open card's colour picker, for the editor to draw. It belongs
+  // to one card: for any other card, or with none open, it is not used.
+  const [trying, setTrying] = useState<{ cardId: string; colour: string } | null>(null);
+  const backgroundPreview = trying !== null && trying.cardId === openId ? trying.colour : null;
+
   // Show or close the dialog to match the open card. If the card goes away (undo), close it.
   useEffect(() => {
     const element = dialog.current;
@@ -181,8 +186,12 @@ export function Board({
       unlockScroll.current = lockPageScroll();
       // The browser puts focus on the first control it finds, which is past the editor while
       // the photo is still being opened. Start at the heading instead, so Tab goes through the
-      // dialog from the top: crop area, focal point, Reset crop, file type, and Close last.
+      // dialog from the top: crop area, focal point, Reset crop, Fit whole photo, background
+      // colour, file type, and Close last.
       document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
+      // In a short window that first control can be below the fold, and the browser scrolls
+      // the dialog down to it before the focus is moved. Start at the top of the dialog too.
+      element.scrollTop = 0;
     }
     if (!openCard && element.open) element.close();
   }, [openCard, dialogHeadingId]);
@@ -234,6 +243,7 @@ export function Board({
         blob={missingAssetIds.includes(asset.id) ? undefined : getAssetBlob(asset.id)}
         loadPhoto={loadPhoto}
         undo={dialogUndo}
+        backgroundPreview={backgroundPreview}
       />
     );
   }
@@ -400,6 +410,9 @@ export function Board({
               version={versions.get(openCard.id) as VersionInfo}
               headingId={dialogHeadingId}
               undo={dialogUndo}
+              onBackgroundPreview={(colour) =>
+                setTrying(colour === null ? null : { cardId: openCard.id, colour })
+              }
             />
             <div>
               <button type="button" className={buttonClass} onClick={() => dialog.current?.close()}>

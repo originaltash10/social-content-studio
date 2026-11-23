@@ -5,7 +5,13 @@
  * What it writes, and when. Opening the editor writes nothing: a stored crop that is smaller
  * than the editor allows is enlarged for display only. The card is changed with one
  * `updateCard` when a drag is released with a different crop, when an arrow key moves the
- * crop or plus or minus resizes it, and when Reset crop is pressed.
+ * crop or plus or minus resizes it, and when Reset crop or Fit whole photo is pressed.
+ *
+ * Padding. A crop may be larger than the photo, up to the fit size, which shows the whole
+ * photo; the space outside the photo is padding, drawn here and in the file in the card's
+ * background colour. Fit whole photo sets the fit-size crop, centred on the photo. Reset crop
+ * returns to the automatic crop, which fills the frame and has no padding. Neither changes the
+ * colour. The area shown is the fit frame, so it is the same size whatever the crop is.
  *
  * The focal point. A card uses its photo's focal point, shared with the photo's other cards,
  * unless it has its own (a duplicate does). Everything here goes by the point the card uses:
@@ -34,15 +40,18 @@ import {
   automaticCrop,
   constrainCrop,
   cropLimits,
+  fitWholeCrop,
   isAutomaticCrop,
   moveCrop,
   movePoint,
   resizeDelta,
+  sameCrop,
   scaleCrop,
 } from '../lib/editor/geometry';
 import type { Point } from '../lib/editor/geometry';
 import { ownFocalMove, recentredCrops } from '../lib/editor/focal';
 import { getPlacement } from '../lib/platforms';
+import { backgroundOf } from '../lib/render/background';
 import { effectiveFocal } from '../lib/render/focal';
 import { useSessionStore } from '../store/sessionStore';
 import type { Asset, Card, ImageEdit, Rect, Size } from '../types';
@@ -68,6 +77,11 @@ export type EditorProps = {
   loadPhoto?: PhotoLoader;
   /** The card dialog's undo, shared with the rest of the dialog; the editor's own without one. */
   undo?: DialogUndo;
+  /**
+   * A colour to draw the padding in instead of the card's own: the one being tried in the
+   * colour picker, before it is written to the card.
+   */
+  backgroundPreview?: string | null;
 };
 
 export const LOADING_TEXT = 'Opening the photo so you can adjust the crop…';
@@ -75,13 +89,23 @@ export const HELP_TEXT =
   'Drag the crop to move it, or drag a corner to resize it. Click the crop or press Tab to ' +
   'select it; then the arrow keys move it, the = key makes it bigger and the - key makes it ' +
   'smaller. Hold Shift for steps ten times as big. The plus and minus keys on a number pad ' +
-  'work too. The round marker is the focal point, which automatic crops are centred on: drag ' +
-  'it, or select it and use the arrow keys.';
+  'work too. Make the crop larger than the photo, or choose Fit whole photo, to show more of ' +
+  'the photo with the background colour around it. The round marker is the focal point, which ' +
+  'automatic crops are centred on: drag it, or select it and use the arrow keys.';
+export const FIT_LABEL = 'Fit whole photo';
 
 /** A card's output size, from src/data/platforms.json; undefined for an unknown placement. */
 const targetOf = (card: Card) => getPlacement(card.platform, card.placement)?.sizes[0];
 
-export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorProps) {
+export function Editor({
+  card,
+  asset,
+  target,
+  blob,
+  loadPhoto,
+  undo,
+  backgroundPreview,
+}: EditorProps) {
   const state = useSourcePhoto(
     {
       assetId: asset.id,
@@ -106,6 +130,8 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
   const focal = effectiveFocal(card, asset);
   const kind: FocalKind = own ? 'own' : 'shared';
   const automatic = isAutomaticCrop(card.edit.crop, source, target, focal);
+  // The whole photo in the placement's shape. It is also the area shown: every crop is in it.
+  const fit = fitWholeCrop(source, target);
 
   useEffect(() => {
     function onKeyDown(event: globalThis.KeyboardEvent) {
@@ -166,10 +192,12 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
     if (!move && resize === null) return;
     event.preventDefault();
     const next = move
-      ? moveCrop(shown, move.dx, move.dy)
+      ? moveCrop(shown, move.dx, move.dy, limits)
       : scaleCrop(shown, resize as number, limits);
-    // At the edge of the photo or at a size limit nothing changes, so nothing is written.
-    if (next.x !== shown.x || next.y !== shown.y || next.width !== shown.width) write(next);
+    // Where the crop limits stop it, or at a size limit, nothing changes, so nothing is written.
+    // Compared with a tolerance: a crop held in place by the limits can come back different
+    // in its last decimal places, and that is not a change.
+    if (!sameCrop(next, shown)) write(next);
   }
 
   if (state.kind === 'loading') {
@@ -192,6 +220,8 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
         photo={state.photo}
         crop={shown}
         limits={limits}
+        area={fit}
+        background={backgroundPreview ?? backgroundOf(card)}
         onCommit={write}
         label={stageLabel(asset.fileName)}
         describedBy={readoutId}
@@ -213,7 +243,7 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
         {focalKindText(kind)}
       </p>
       <p className="text-label text-muted-text">{HELP_TEXT}</p>
-      <div>
+      <div className="flex flex-wrap gap-2">
         <button
           type="button"
           className={buttonClass}
@@ -221,6 +251,16 @@ export function Editor({ card, asset, target, blob, loadPhoto, undo }: EditorPro
           onClick={() => write(automaticCrop(source, target, focal))}
         >
           Reset crop
+        </button>
+        <button
+          type="button"
+          className={buttonClass}
+          onClick={() => {
+            // Already the whole photo: nothing to write, and no undo step.
+            if (!sameCrop(shown, fit)) write(fit);
+          }}
+        >
+          {FIT_LABEL}
         </button>
       </div>
     </div>

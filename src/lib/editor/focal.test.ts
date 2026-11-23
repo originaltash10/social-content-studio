@@ -3,7 +3,7 @@ import { getPlacement } from '../platforms';
 import { hash, makeAsset, makeCard, makeImageEdit } from '../../test/fixtures';
 import type { Card, Size } from '../../types';
 import { ownFocalMove, recentredCrops } from './focal';
-import { automaticCrop, moveCrop } from './geometry';
+import { automaticCrop, cropLimits, moveCrop } from './geometry';
 
 // Output sizes come from the platform data, never from this file.
 const targetOf = (card: Card): Size | undefined =>
@@ -46,7 +46,9 @@ describe('recentredCrops', () => {
   it('leaves a card whose crop was adjusted by hand', () => {
     const adjusted = vertical({
       id: 'adjusted',
-      edit: makeImageEdit({ crop: moveCrop(automaticCrop(SOURCE, VERTICAL, OLD), 0.05, 0) }),
+      edit: makeImageEdit({
+        crop: moveCrop(automaticCrop(SOURCE, VERTICAL, OLD), 0.05, 0, cropLimits(SOURCE, VERTICAL)),
+      }),
     });
     expect(recentredCrops([adjusted, square()], PHOTO, NEW, targetOf)).toEqual([
       { cardId: 'square', crop: automaticCrop(SOURCE, SQUARE, NEW) },
@@ -125,7 +127,10 @@ describe('ownFocalMove', () => {
   });
 
   it('moves the point only, for a crop adjusted by hand', () => {
-    const adjusted = own(OLD, moveCrop(automaticCrop(SOURCE, VERTICAL, OLD), 0.05, 0));
+    const adjusted = own(
+      OLD,
+      moveCrop(automaticCrop(SOURCE, VERTICAL, OLD), 0.05, 0, cropLimits(SOURCE, VERTICAL)),
+    );
     const move = ownFocalMove(adjusted, SOURCE, VERTICAL, NEW);
     expect(move).toEqual({ focal: NEW });
     expect(move && Object.hasOwn(move, 'crop')).toBe(false);
@@ -163,7 +168,10 @@ describe('ownFocalMove', () => {
     // Both a card on its automatic crop and one adjusted by hand; the start point differs from
     // every expected point, so there is always a move.
     const start = { x: 0.4, y: 0.6 };
-    const adjusted = own(start, moveCrop(automaticCrop(SOURCE, SQUARE, start), 0.03, 0));
+    const adjusted = own(
+      start,
+      moveCrop(automaticCrop(SOURCE, SQUARE, start), 0.03, 0, cropLimits(SOURCE, SQUARE)),
+    );
     for (const card of [own(start, automaticCrop(SOURCE, SQUARE, start)), adjusted]) {
       const move = ownFocalMove(card, SOURCE, SQUARE, wanted);
       expect(move?.focal).toEqual(expected);
