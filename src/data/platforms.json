@@ -162,7 +162,7 @@
     {
       "platform": "instagram",
       "placement": "story",
-      "label": "Story",
+      "label": "Reel / Story",
       "mediaTypes": ["image", "video"],
       "sizes": [
         {
@@ -185,9 +185,11 @@
       "captionLinksClickable": false,
       "hashtagsInCaption": false,
       "safeZone": {
-        "kind": "centered-area",
-        "width": 1080,
-        "height": 1610
+        "kind": "insets",
+        "top": 0.14,
+        "bottom": 0.35,
+        "left": 0.06,
+        "right": 0.06
       },
       "verified": {
         "sizes": "2026-11-02",
@@ -198,7 +200,8 @@
         "limits": "platform-help-2026-mid"
       },
       "assumptions": [
-        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\")."
+        "SPEC lists 30 fps only on the Instagram Reel row; applied to every video placement per validation rule 3 (\"Frame rate 30 fps recommended\").",
+        "Shown as \"Reel / Story\", so rule 7 warns in either the Story or the Reel unsafe zone. SPEC's Story safe area (1080 x 1610 centred: 155 px clear at top and bottom, none at the sides) lies inside the Instagram Reel insets on every edge, so the Reel insets are used. Re-check both if either changes."
       ],
       "notes": ["Video duration limit is per Story."]
     },

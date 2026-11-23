@@ -1,9 +1,9 @@
 /**
  * The background colour controls. The store is real and the card is read from it on every
  * render, as the board does. jsdom has no colour picker, so the picker is driven with the
- * events a browser sends: `input` for each colour tried, then `change` when the picker is
- * closed on a new colour, or `cancel` when it is closed with no change. The real picker and
- * real typing are checked in Chromium.
+ * events a browser may send: `input` for each colour tried, then, as it closes, `change`,
+ * `blur` or `cancel`, in any order and any combination. Whichever arrives keeps the colour the
+ * picker shows. The real picker and real typing are checked in Chromium.
  */
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -76,10 +76,12 @@ function expectUntouched(before: ReturnType<typeof snapshot>) {
 
 /** A colour tried in the open picker: the browser's `input` event. */
 const tryColour = (colour: string) => fireEvent.input(picker(), { target: { value: colour } });
-/** The picker closed on the colour it shows: the browser's `change` event. */
+/** The picker closed: the browser's `change` event. */
 const closePicker = () => fireEvent(picker(), new Event('change', { bubbles: true }));
-/** The picker closed with no change: the browser's `cancel` event. */
+/** The picker closed: the browser's `cancel` event. */
 const cancelPicker = () => fireEvent(picker(), new Event('cancel', { bubbles: true }));
+/** Focus left the picker: a click outside it, or the window losing focus. */
+const leavePicker = () => fireEvent.blur(picker());
 
 function type(text: string) {
   fireEvent.change(hex(), { target: { value: text } });
@@ -180,11 +182,14 @@ describe('the colour picker', () => {
     expect(undo.undo()).toBe(false);
   });
 
-  it('writes nothing and takes the preview back when it is closed with no change', () => {
+  it("writes nothing when Escape puts the card's colour back before the picker closes", () => {
     const { before } = openWith('#0a7f5c');
     tryColour('#ff0000');
     expect(onPreview).toHaveBeenLastCalledWith('#ff0000');
+    // Chrome puts the colour the picker opened with back in the input on Escape.
+    tryColour('#0a7f5c');
     cancelPicker();
+    leavePicker();
     expect(onPreview).toHaveBeenLastCalledWith(null);
     expect(picker().value).toBe('#0a7f5c');
     expectUntouched(before);
@@ -205,12 +210,8 @@ describe('the colour picker', () => {
     expectUntouched(plain.before);
   });
 
-  it('takes the preview back when it loses focus or goes away without a change', () => {
+  it('takes the preview back, writing nothing, when it goes away while a colour is tried', () => {
     const { before, unmount } = openWith();
-    tryColour('#ff0000');
-    fireEvent.blur(picker());
-    expect(onPreview).toHaveBeenLastCalledWith(null);
-    expect(picker().value).toBe('#ffffff');
     tryColour('#00ff00');
     unmount();
     expect(onPreview).toHaveBeenLastCalledWith(null);
@@ -220,6 +221,91 @@ describe('the colour picker', () => {
   it('holds no text, so Ctrl/Cmd-Z on it undoes the last change in the dialog', () => {
     openWith();
     expect(isTyping(picker())).toBe(false);
+  });
+});
+
+describe('the colour picker keeps the colour it shows when it closes, however it closes', () => {
+  /** One step in the store and one in the dialog's undo, the card on `colour`, preview over. */
+  function expectOneStep(before: ReturnType<typeof snapshot>, colour: string) {
+    expect(card().background).toBe(colour);
+    expect(steps()).toBe(before.steps + 1);
+    expect(undo.count()).toBe(1);
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+    expect(picker().value).toBe(colour);
+    expect(hex().value).toBe(colour);
+  }
+
+  it('input events then a loss of focus, with no change event: one step', () => {
+    const { before } = openWith();
+    tryColour('#ff0000');
+    tryColour('#0a7f5c');
+    leavePicker();
+    expectOneStep(before, '#0a7f5c');
+  });
+
+  it('input events, then change, then a loss of focus: one step', () => {
+    const { before } = openWith();
+    tryColour('#ff0000');
+    tryColour('#0a7f5c');
+    closePicker();
+    leavePicker();
+    expectOneStep(before, '#0a7f5c');
+  });
+
+  it('a loss of focus, then change: one step', () => {
+    const { before } = openWith();
+    tryColour('#0a7f5c');
+    leavePicker();
+    closePicker();
+    expectOneStep(before, '#0a7f5c');
+  });
+
+  it('change only: one step', () => {
+    const { before } = openWith();
+    // A new value and the element's `change` event, with no `input` event before it.
+    fireEvent.change(picker(), { target: { value: '#0a7f5c' } });
+    expectOneStep(before, '#0a7f5c');
+    expect(onPreview).not.toHaveBeenCalledWith('#0a7f5c');
+  });
+
+  it('cancel on a colour that is shown: one step', () => {
+    const { before } = openWith();
+    tryColour('#0a7f5c');
+    cancelPicker();
+    leavePicker();
+    expectOneStep(before, '#0a7f5c');
+  });
+
+  it('a loss of focus with the value unchanged: no step', () => {
+    const { before } = openWith('#0a7f5c');
+    leavePicker();
+    expectUntouched(before);
+    // Nor after colours tried and then the card's own colour chosen again.
+    tryColour('#ff0000');
+    tryColour('#0a7f5c');
+    leavePicker();
+    closePicker();
+    expectUntouched(before);
+    expect(onPreview).toHaveBeenLastCalledWith(null);
+  });
+
+  it('a second opening that closes on another colour is a second step, undone one at a time', () => {
+    const { before } = openWith();
+    tryColour('#0a7f5c');
+    leavePicker();
+    tryColour('#112233');
+    closePicker();
+    leavePicker();
+    expect(card().background).toBe('#112233');
+    expect(steps()).toBe(before.steps + 2);
+    act(() => {
+      expect(undo.undo()).toBe(true);
+    });
+    expect(card().background).toBe('#0a7f5c');
+    act(() => {
+      expect(undo.undo()).toBe(true);
+    });
+    expect(Object.hasOwn(card(), 'background')).toBe(false);
   });
 });
 

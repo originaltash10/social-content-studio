@@ -39,17 +39,20 @@
  * corner targets shrink on a small crop, where a press in the middle moves it and a press on a
  * corner resizes it; Fit whole photo reached with Tab and pressed from the keyboard; a colour
  * typed into the hex box shows in the editor and in the rendered file; Ctrl-Z steps back
- * through the colour and the fit; the arrow keys keep to the crop limits; Reset crop removes
- * the padding and keeps the colour; a .scs download and reload keeps both; and a duplicate has
- * the colour. Each of these is its own step, so one that cannot run (in a version of the app
+ * through the colour and the fit; a colour tried in the colour picker is kept when a click
+ * outside closes the picker, as one undo step; the arrow keys keep to the crop limits; Reset
+ * crop removes the padding and keeps the colour; a .scs download and reload keeps both; and a
+ * duplicate has the colour. Each of these is its own step, so one that cannot run (in a version of the app
  * without the control it needs) fails by itself and the rest still run.
  *
  * How it reaches things. Every control is reached the way a person reaches it: with Tab, or
  * with a real mouse click or drag. Keys are sent with page.keyboard, to whatever has focus. It
  * never calls element.focus() and never dispatches an event straight at an element. The two
  * exceptions, each with its reason where it is used: files are given to the file inputs with
- * setInputFiles, because the system's file picker cannot be driven; and touch input is sent
- * through the DevTools protocol, because Playwright's mouse cannot make a touch.
+ * setInputFiles, because the system's file picker cannot be driven; touch input is sent
+ * through the DevTools protocol, because Playwright's mouse cannot make a touch; and a colour
+ * tried in the colour picker is set on the input with the `input` event Chrome sends, because
+ * Chrome's colour picker is browser UI that Playwright cannot open or click in.
  *
  * Like e2e/board.check.mjs, it needs Playwright with Chromium already installed on the machine,
  * and is not part of `npm test` or the deploy workflow. Nothing it produces is written inside
@@ -1790,6 +1793,64 @@ async function runPadding(browser, name, url) {
             (await cardCount()) === 2,
           `after one press: crop ${cropText(afterOne.crop)}, padding ${afterOne.colour}, hex "${afterOne.hex}"; ` +
             `after two: crop ${cropText(afterTwo.crop)}; after three: crop ${cropText(afterThree)}, ${await cardCount()} cards`,
+        );
+      },
+    );
+
+    // 6b. The colour picker closed by a click outside it, which sends no change event first.
+    await step(
+      'a colour tried in the picker is kept when a click outside closes it, as one undo step',
+      async (title) => {
+        await picker.waitFor({ timeout: NEW_CONTROL_MS });
+        const heading = dialog.getByRole('heading', { level: 2 });
+        await heading.click();
+        await tabTo(page, picker, 'the colour picker');
+        // Chrome's colour picker is browser UI that Playwright cannot open or click in, so the
+        // colour tried in it is set on the input here, with the one `input` event Chrome sends
+        // for each colour tried, and no `change` event. The value is set through the input's
+        // own setter, as the browser sets it, so React sees the change. Everything after this
+        // is real: the click on the dialog's heading moves focus off the picker, as a click
+        // outside the open picker does, and Ctrl-Z is a real key press.
+        await picker.evaluate((element, colour) => {
+          const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+          setter.call(element, colour);
+          element.dispatchEvent(new Event('input', { bubbles: true }));
+        }, COLOUR);
+        const tried = await paddingStyle();
+        await heading.click();
+        await settle(page);
+        const kept = {
+          hex: await hex.inputValue(),
+          picker: await picker.inputValue(),
+          padding: await paddingStyle(),
+        };
+        const seen =
+          `while tried: padding ${tried}; after the click outside: hex box "${kept.hex}", ` +
+          `picker "${kept.picker}", padding ${kept.padding}`;
+        if (kept.hex !== COLOUR) {
+          check(title, false, `${seen}; the colour was not kept`);
+          return;
+        }
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+        await focusCrop();
+        await undo();
+        feedSrc = await nextRender(page, FEED_CARD, feedSrc);
+        const afterOne = { hex: await hex.inputValue(), padding: await paddingStyle() };
+        await undo();
+        await settle(page);
+        const afterTwo = { hex: await hex.inputValue(), src: await tileSrc(page, FEED_CARD) };
+        check(
+          title,
+          tried === COLOUR_CSS &&
+            kept.picker === COLOUR &&
+            kept.padding === COLOUR_CSS &&
+            afterOne.hex === WHITE &&
+            afterOne.padding === 'rgb(255, 255, 255)' &&
+            afterTwo.hex === WHITE &&
+            afterTwo.src === feedSrc &&
+            (await cardCount()) === 2,
+          `${seen}; after one Ctrl-Z: hex box "${afterOne.hex}", padding ${afterOne.padding}; ` +
+            `after a second: hex box "${afterTwo.hex}", file unchanged: ${afterTwo.src === feedSrc}`,
         );
       },
     );

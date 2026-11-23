@@ -5,11 +5,15 @@
  *
  * What it writes, and when. Every write is one `updateCard`, one undo step, recorded in the card
  * dialog's undo, and marks the card changed, so the board renders and checks it again.
- * - The picker shows each colour as it is tried, through `onPreview`, so the editor can draw it,
- *   and writes once, on the picker's own `change` event, which the browser sends when the
- *   picker is closed on a new colour. A picker closed with no change writes nothing, and the
- *   preview is taken back: on the picker's `cancel` event, when the picker loses focus, and
- *   when this control goes away.
+ * - The picker shows each colour as it is tried, through `onPreview`, so the editor can draw it.
+ *   Whatever colour it shows when it closes is kept, however it closes: a click outside it,
+ *   Enter, its own controls, or the window losing focus. The browser may send `change`, `blur`
+ *   or `cancel` as it closes, in any order, or only some of them, so each of them writes the
+ *   input's value as it is at that moment, and only then takes the preview back. The first
+ *   one writes the colour, if it differs from the card's; any later one finds the card already
+ *   on that colour and writes nothing, so one opening is at most one undo step. Escape puts
+ *   back the colour the picker opened with, so it writes nothing. When this control goes away
+ *   the preview is taken back and nothing is written.
  * - The text box writes on Enter and when it loses focus, if what was typed is a colour and it
  *   differs from the card's. Anything else is not written: Enter leaves the text in place with
  *   a message, and losing focus puts the card's colour back in the box.
@@ -86,21 +90,20 @@ export function BackgroundControls({
   });
 
   // React's onChange on a colour input is the `input` event, which the browser sends for every
-  // colour tried. The picker being closed is the element's own `change` (a new colour) or
-  // `cancel` (no change) event, so those are listened for directly.
+  // colour tried. The picker closing is any of the element's own `change`, `blur` and `cancel`
+  // events, so those are listened for directly. Each reads the value from the element itself,
+  // which is the colour the picker shows, and writes it before the preview is taken back:
+  // taking the preview back first would put the card's colour back in the element.
   useEffect(() => {
     const element = picker.current as HTMLInputElement;
-    const onChange = () => {
-      const colour = element.value;
+    const onClose = () => {
+      latest.current.write(element.value);
       latest.current.preview(null);
-      latest.current.write(colour);
     };
-    const onCancel = () => latest.current.preview(null);
-    element.addEventListener('change', onChange);
-    element.addEventListener('cancel', onCancel);
+    const events = ['change', 'blur', 'cancel'] as const;
+    for (const type of events) element.addEventListener(type, onClose);
     return () => {
-      element.removeEventListener('change', onChange);
-      element.removeEventListener('cancel', onCancel);
+      for (const type of events) element.removeEventListener(type, onClose);
       latest.current.preview(null);
     };
   }, []);
@@ -138,8 +141,12 @@ export function BackgroundControls({
           aria-label={PICKER_NAME}
           value={trying ?? background}
           className={`h-11 w-11 cursor-pointer rounded-control border border-muted bg-surface p-1 ${focusClass}`}
-          onChange={(event) => preview(event.target.value)}
-          onBlur={() => preview(null)}
+          onChange={(event) => {
+            // Only a colour being tried is a preview. React also calls this for the element's
+            // `change` event when no `input` event came before it; that one closes the picker,
+            // and the listener above has already written it.
+            if (event.nativeEvent.type === 'input') preview(event.target.value);
+          }}
         />
         <label htmlFor={hexId} className="flex items-center gap-2">
           <span className="text-label text-muted-text">{HEX_LABEL}</span>

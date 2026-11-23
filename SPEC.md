@@ -92,7 +92,7 @@ These rules live in `src/data/platforms.json`, not in code, so marketing can upd
 | Instagram | Feed square | 1080 x 1080 | 1:1 | image | 2,200 chars | |
 | Instagram | Feed landscape | 1080 x 566 | 1.91:1 | image | 2,200 chars | |
 | Instagram | Carousel | 1080 x 1350 | 4:5 | image set | 2,200 chars | 2 to 20 slides, same ratio for all |
-| Instagram | Story | 1080 x 1920 | 9:16 | image or video | n/a | Safe area 1080 x 1610 centered; video up to 60 s per Story |
+| Instagram | Story | 1080 x 1920 | 9:16 | image or video | n/a | Safe area 1080 x 1610 centered; video up to 60 s per Story. Shown in the app as "Reel / Story" (key `story`) |
 | Instagram | Reel | 1080 x 1920 | 9:16 | video | 2,200 chars | Up to 3 min; MP4 H.264, AAC; keep top 14%, bottom 35%, sides 6% clear; 30 fps; cover crops to 3:4 on grid |
 | LinkedIn | Image post square | 1200 x 1200 | 1:1 | image | 3,000 chars | "...see more" cuts around 210 chars on desktop, 140 on mobile |
 | LinkedIn | Image post vertical | 720 x 900 | 4:5 | image | 3,000 chars | |
@@ -116,6 +116,7 @@ Validation runs on every change and produces one result per card: pass, warn, or
 5. Hashtag count under cap; otherwise fail.
 6. Carousel slide count in range and all slides the same ratio; otherwise fail.
 7. Any text overlay, logo, or focal point inside a Story or Reel unsafe zone; warn. The focal point is always inside the photo, so this rule is the same for a crop with padding.
+   The Instagram placement shown as "Reel / Story" (key `story`) warns inside either the Story or the Reel unsafe zone, whichever is larger on each edge. With the current figures that is the Reel's on every edge, so its entry in `platforms.json` uses the Reel insets.
 8. Alt text missing on an image; warn.
 9. Caption contains a URL on Instagram, where links are not clickable; warn.
 
@@ -295,7 +296,7 @@ Editor:
 
 Card details shows a Background colour control for every card the editor can open, with a short note that the colour fills any space where the crop goes past the photo's edges. It has the browser's colour picker and a labelled text box showing the hex code:
 
-- Colour picker: the editor shows each colour as it is tried, and the card is changed once, as one undo step, when the picker reports its change. If the picker closes with no change there is no undo step and the editor goes back to the card's colour.
+- Colour picker: the editor shows each colour as it is tried. Whatever colour the picker shows when it closes is kept, however it closes: a click outside it, Enter, the picker's own controls, or the dialog losing focus. It is one undo step if it differs from the card's colour, and no undo step if it is the same. Each opening of the picker gives at most one undo step, even when the browser reports both a change and a loss of focus. Escape puts back the colour the picker opened with, so it changes nothing.
 - Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
 - Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
 

@@ -212,7 +212,9 @@ describe('creating cards', () => {
     expect(within(form).getByRole('group', { name: 'LinkedIn' })).toBeInTheDocument();
     expect(within(form).queryByRole('group', { name: 'Facebook' })).toBeNull();
     expect(within(form).queryByRole('group', { name: 'X' })).toBeNull();
-    expect(within(form).queryByRole('checkbox', { name: /Carousel|Reel|Video/ })).toBeNull();
+    // No carousel or video-only placement. A whole label is matched, since "Reel / Story" is a
+    // photo placement that is offered.
+    expect(within(form).queryByRole('checkbox', { name: /^(Carousel|Reel|Video) \(/ })).toBeNull();
     const size = sizeOf(FEED);
     expect(
       within(form).getByRole('checkbox', {
@@ -318,6 +320,39 @@ describe('creating cards', () => {
     expect(screen.queryByRole('form', { name: 'Create cards' })).toBeNull();
     expect(button('Create cards')).toHaveFocus();
     expect(button('Create cards')).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe('the Instagram placement labelled Reel / Story', () => {
+  it('shows its label from platforms.json everywhere, and keeps the key "story"', async () => {
+    const spec = getPlacement('instagram', 'story') as PlacementSpec;
+    expect(spec.label).toBe('Reel / Story');
+    const size = sizeOf(spec);
+    openSession(PHOTO);
+    renderBoard();
+    fireEvent.click(button('Create cards'));
+    const form = screen.getByRole('form', { name: 'Create cards' });
+    // In the placement picker, with its size.
+    expect(
+      within(form).getByRole('checkbox', {
+        name: `Reel / Story (${size.width} × ${size.height})`,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(button('Create cards'));
+    createCards('Reel / Story');
+    // The key is what is stored, so saved sessions and export names are unchanged.
+    expect(store().session?.cards.map((c) => c.placement)).toEqual(['story']);
+    await sent(1);
+    answer(0);
+    await idle();
+    // On the card tile, its preview, and the card dialog.
+    const tile = article('Instagram Reel / Story for site.jpg, v1');
+    expect(within(tile).getByRole('img')).toHaveAttribute(
+      'alt',
+      'Preview of site.jpg for Instagram Reel / Story',
+    );
+    fireEvent.click(button('Open Instagram Reel / Story for site.jpg, v1'));
+    expect(screen.getByRole('dialog', { name: 'Instagram Reel / Story' })).toBeInTheDocument();
   });
 });
 
@@ -1314,13 +1349,15 @@ describe('undo in the dialog', () => {
     expect(client.calls).toHaveLength(1);
     fireEvent.input(picker, { target: { value: '#112233' } });
     expect(padding().style.backgroundColor).toBe('rgb(17, 34, 51)');
-    // Closed with no change: the editor goes back to the card's colour.
+    // Escape: Chrome puts the card's colour back in the picker, so closing it changes nothing.
+    fireEvent.input(picker, { target: { value: '#ffffff' } });
     fireEvent(picker, new Event('cancel', { bubbles: true }));
     expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(store().undoStack).toHaveLength(before.steps);
-    // Closed on a new colour: one step, and the card is rendered again in that colour.
+    // Closed on a new colour by focus leaving it, with no change event: one step, and the card
+    // is rendered again in that colour.
     fireEvent.input(picker, { target: { value: '#0a7f5c' } });
-    fireEvent(picker, new Event('change', { bubbles: true }));
+    fireEvent.blur(picker);
     expect(store().session?.cards[0]?.background).toBe('#0a7f5c');
     expect(store().undoStack).toHaveLength(before.steps + 1);
     expect(padding().style.backgroundColor).toBe('rgb(10, 127, 92)');
