@@ -320,7 +320,7 @@ describe('the rendered file while the card is rendered again', () => {
       />,
     );
     expect(screen.queryByRole('region', { name: 'Rendered file' })).toBeNull();
-    expect(screen.getByText('Could not be saved as JPG.')).toHaveClass('text-red-700');
+    expect(screen.getByText('Could not be saved as JPG.')).toHaveClass('text-danger-text');
   });
 
   it('is busy only while a file is being made', () => {

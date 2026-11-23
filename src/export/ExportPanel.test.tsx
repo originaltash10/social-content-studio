@@ -259,7 +259,7 @@ describe('Export to session folder', () => {
       within(results()).getByText(
         'Permission to write to folder "Topping out" was not granted. Nothing was exported.',
       ),
-    ).toHaveClass('text-red-700');
+    ).toHaveClass('text-danger-text');
     expect(createClient).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: 'Export results' })).toHaveFocus();
   });
@@ -282,7 +282,7 @@ describe('Export to session folder', () => {
     fireEvent.click(button('Export to session folder'));
     await settle();
     expect(within(results()).getByText(/There is not enough space on the disk\./)).toHaveClass(
-      'text-red-700',
+      'text-danger-text',
     );
     expect(screen.getByRole('heading', { name: 'Export results' })).toHaveFocus();
   });

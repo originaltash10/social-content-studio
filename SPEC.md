@@ -1,6 +1,6 @@
 # Social Content Studio — Product Spec
 
-As of November 19, 2026
+As of November 23, 2026
 
 ## Purpose
 
@@ -48,7 +48,7 @@ Each row is a feature Claude Code should treat as a unit of work. Priority: P1 s
 | Images | Fit whole photo: show the whole photo in the placement's shape, with padding | P1 | New cards still fill the frame; padding appears only when the user chooses it |
 | Images | Background colour per card, filling any space where the crop goes past the photo's edges | P1 | White unless the user picks another colour |
 | Images | Text overlay with brand fonts, colors, alignment, shadow, safe-zone snapping | P1 | |
-| Images | Logo and watermark placement with opacity | P1 | |
+| Images | Logo placement with opacity | P1 | One logo per card; no separate watermark in the MVP |
 | Images | Carousel builder: order slides, per-slide text, cover slide | P1 | Instagram up to 20 slides; LinkedIn exports as PDF document |
 | Images | Collage: 2 to 6 images in grid or freeform layout into one image | P2 | |
 | Images | Background removal | P3 | Browser-side model is heavy; defer |
@@ -69,10 +69,10 @@ Each row is a feature Claude Code should treat as a unit of work. Priority: P1 s
 | Validation | Preview mock inside a fake feed, Story, and LinkedIn card | P2 | Shows where "...more" truncates |
 | Board | Card grid grouped by source asset or campaign, filter by platform and status | P1 | |
 | Board | Duplicate card as linked variant with lineage | P1 | |
-| Board | Compare two to four cards side by side with caption diff | P1 | |
+| Board | Compare two to four cards side by side with caption diff | P2 | Phase 3 |
 | Board | Status field (Draft, Review, Approved) and comments per card | P2 | Keep it light; no permissions system |
 | Board | Calendar view with a planned date per card | P3 | |
-| Brand | Brand kit: logos, fonts, colors, voice document, overlay presets | P1 | Stored in the session and exportable as a brand file |
+| Brand | Brand kit: logos, fonts, colors, voice document, overlay presets | P1 | Stored in the session; exported and imported as one bundle |
 | Brand | Templates: Project announcement, Job posting, Event recap, Safety message | P2 | |
 | Session | Autosave to a local folder via File System Access API; manual save and load | P1 | Chrome and Edge; download a .scs bundle as fallback |
 | Session | Clear session with confirmation | P1 | |
@@ -117,6 +117,7 @@ Validation runs on every change and produces one result per card: pass, warn, or
 6. Carousel slide count in range and all slides the same ratio; otherwise fail.
 7. Any text overlay, logo, or focal point inside a Story or Reel unsafe zone; warn. The focal point is always inside the photo, so this rule is the same for a crop with padding.
    The Instagram placement shown as "Reel / Story" (key `story`) warns inside either the Story or the Reel unsafe zone, whichever is larger on each edge. With the current figures that is the Reel's on every edge, so its entry in `platforms.json` uses the Reel insets.
+   Text overlay and logo boxes are stored as fractions of the finished frame (the output picture), and this rule compares them with the safe zone in that same space.
 8. Alt text missing on an image; warn.
 9. Caption contains a URL on Instagram, where links are not clickable; warn.
 
@@ -139,13 +140,13 @@ Tasks built on that interface, each a function in `src/ai/tasks/`:
 | --- | --- | --- | --- |
 | caption | brief, platform, tone, image description | caption text | Returns JSON `{caption, firstComment, hashtags}` |
 | fitToLimit | caption, cap, CTA | shortened caption | Keeps the CTA sentence verbatim |
-| altText | image | one or two sentences | Describes content, not mood; no "image of" prefix |
+| altText | a reduced copy of the card's finished picture, metadata removed | one or two sentences | Describes content, not mood; no "image of" prefix. The original file is never sent |
 | rewriteTone | text, target tone | text | LinkedIn formal, Instagram conversational, X terse |
 | describeImage | image | structured description | Used to ground captions; cached per source asset |
 | repurpose | pasted text or URL content | post set per platform | P2 |
 | transcribe | audio track | timed captions | P2; Whisper via transformers.js when no provider supports audio |
 
-Key handling: the user pastes a key in Settings. It is stored in the browser's IndexedDB for this app only, never written into the session file, never logged, and sent only to that provider's API endpoint. Settings shows a "Test connection" button and a per-provider usage counter. Browser calls to the Anthropic API need the `anthropic-dangerous-direct-browser-access` header; Gemini and OpenAI accept browser calls with a key directly.
+Key handling: the user pastes a key in Settings. It is stored in the browser's IndexedDB for this app only, never written into a session file, an export or a log, and sent only to that provider's API endpoint. Settings shows a "Test connection" button, a visible "Remove key" button and a per-provider usage counter. There is no default provider; the user chooses one in Settings. Whether each provider allows calls straight from a web page with the user's own key is confirmed before its adapter is built. When this spec was first written, the understanding was that browser calls to the Anthropic API need the `anthropic-dangerous-direct-browser-access` header and that Gemini and OpenAI accept browser calls with a key directly; both are to be confirmed.
 
 Every generated text records `{provider, model, timestamp}` so the card can show who wrote it. A "Regenerate" button re-runs the same task; "Edit" opens the text for manual change and clears the provider badge.
 
@@ -186,7 +187,7 @@ Stack decisions for Claude Code to follow:
 | Framework | React 18, TypeScript, Vite | Fast dev loop, strong typing for the data model |
 | State | Zustand with Immer | Single store, cheap undo via snapshots |
 | Styling | Tailwind CSS | Quick to iterate on a board UI |
-| Canvas | Phase 1 crop and focal point use plain elements with pointer events. Whether to use Fabric.js for Phase 2 text and logo overlays is decided at the start of Phase 2 | The crop and focal point need no canvas library. Fabric 7 adds node-canvas and jsdom as optional dependencies |
+| Canvas | Plain elements with pointer events for the crop, the focal point and the overlays. Overlays are drawn by our own code, with no Fabric.js and no Konva: one drawing function in `src/lib/render` is used for the export and for the editor preview | Preview and export cannot drift apart when they are the same drawing, and it runs in the image worker. See "Phase 2 decisions" |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap` | Keeps the UI responsive during batch resize |
 | HEIC decode | `heic-to` or `libheif-js` | iPhone photos |
 | Video | WebCodecs via `mediabunny` (demux, decode, encode, mux MP4) | Hardware-accelerated; ffmpeg.wasm only as fallback for unsupported codecs |
@@ -198,7 +199,7 @@ Stack decisions for Claude Code to follow:
 
 Workers: one for image jobs, one for video jobs, one for transcription. Each exposes a typed job queue with progress events so the board can show per-card progress bars.
 
-Undo: every store mutation pushes a snapshot of the affected card; Cmd/Ctrl-Z pops it. Fifty levels is enough.
+Undo: every store mutation pushes a snapshot of the affected card; Cmd/Ctrl-Z pops it. Fifty levels is enough. The campaign brief and the brand kit are not cards and are not part of undo.
 
 ## Data model and session file format
 
@@ -209,6 +210,7 @@ MySession/
   session.json
   brand.json
   assets/           original uploads, named by content hash
+  brand/            logo and font files, named by content hash (Phase 2)
   renders/          cached outputs per card, regenerated if missing
   exports/          final deliverables by platform
     instagram/
@@ -267,7 +269,7 @@ type CarouselEdit = { slides: { assetId: string; edit: ImageEdit }[]; coverIndex
 type Provenance = { provider: string; model: string; at: string };
 ```
 
-Rules: asset files are immutable once imported; only the focal point can be changed afterwards, and every other change happens on a card. Duplicating a card copies `edit`, `copy` and `background`, gives the copy its own `focal` (the source card's focal point at that moment), sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
+Rules: asset files are immutable once imported: a photo's file and its pixels never change. Two things can be set afterwards: the focal point, and a cached AI description of the photo (`description`). Every other change happens on a card. Duplicating a card copies `edit`, `copy` and `background`, gives the copy its own `focal` (the source card's focal point at that moment), sets `parentId`, and increments `version`. Compare view loads two to four cards and diffs `copy.caption` word by word while showing renders side by side. Clear session deletes nothing on disk until the user confirms, then empties the store and releases the folder handle.
 
 Background colour: `background` is stored as `#rrggbb` in lowercase, and a card without one is white (`#ffffff`). When a session is loaded, only a valid six-digit hex colour is accepted, in any case, and it is made lowercase; anything else is dropped, so the card is treated as white. The field is in the serializer's allowlist, and undo snapshots include it. The session `version` stays 1: a session saved without the field loads and renders exactly as before.
 
@@ -279,7 +281,7 @@ Crop limits: a crop is stored as fractions of the photo as it is displayed, afte
 
 A session file keeps a crop as four finite numbers and is not checked against these limits when it is loaded. The limits are applied wherever the crop is used, in the editor and in the renderer, where the photo's size and the placement are known. A saved crop that breaks them is shown and rendered corrected, and is written back only when the user changes the crop.
 
-Brand kit (`brand.json`): logos as PNG paths, fonts as uploaded files or Google Fonts names, a color palette, a voice document (plain text, under 500 words), and overlay presets. It is exportable on its own so the marketing team can share one file with the office.
+Brand kit (`brand.json`): logos as PNG files and fonts as uploaded files, both kept in the session's `brand/` folder, a color palette, a voice document (plain text, under 500 words), and overlay presets. Fonts are never fetched from a font service. The brand kit is exported and imported as one bundle, so the marketing team can share one file with the office.
 
 ## Fit whole photo and background colour
 
@@ -312,6 +314,115 @@ Rendering:
 - Board tiles, the card dialog's preview and export all show the padded result. Export renders each card again and strips metadata as before.
 - A card with no background colour and a crop inside the photo renders byte for byte as it did before this feature.
 
+## Phase 2 decisions
+
+Decided before Phase 2 began. Where an earlier part of this spec said something else, it has been changed to match. The type listings above still show the data model as it is built today; a field a decision adds is added to them by the task that builds it.
+
+### Overlays
+
+- Text and logo overlays are drawn by our own code. No Fabric.js and no Konva.
+- One drawing function in `src/lib/render` draws the overlays. The image worker uses it for the exported file, and the editor uses the same function for its preview.
+- Line breaks are always decided at the output size. The preview is that same drawing scaled down; text is never laid out again at screen size.
+- Text is typed in an ordinary text box beside the picture, not on the picture itself.
+- The MVP has no rotated text and no mixed styles inside one text box.
+
+### Where overlays and the logo sit
+
+- Overlay and logo positions are stored as fractions of the finished frame (the output picture), not of the photo. Changing the crop never moves them.
+- Rule 7 compares these boxes with the safe zones in the same space.
+- They are edited in a second view in the card dialog, "Text and logo", which shows the finished frame.
+
+### Fonts
+
+- Inter and Inter Tight are bundled with the app. Fonts the user uploads come later, with the brand kit.
+- Fonts are never fetched from Google or any other font service.
+- The MVP supports Latin text only. Non-Latin scripts are out of scope.
+- The image worker loads the font files itself and waits for them before it draws.
+
+### Brand files
+
+- Logo and font files live in a `brand/` folder in the session folder, named by content hash like photos, and are included in `.scs` bundles.
+- The brand kit can be exported and imported as one bundle.
+- A card has one logo. There is no separate watermark in the MVP.
+
+### Who wrote each piece of text
+
+- Today a card's `copy` has one optional `authoredBy`, beside `caption`, `firstComment`, `hashtags` and `altText`, so it stands for all four at once. Nothing in the app sets it yet.
+- From Phase 2, `authoredBy` covers the caption, the hashtags and the first comment, which the caption task writes together.
+- Alt text gets its own optional provenance field, separate from `authoredBy`. Its name is settled in the task that builds AI alt text.
+
+### Photos
+
+- A photo may store a cached AI description of itself. This is the second exception to "asset files are immutable"; the focal point is the other. The photo's file and its pixels never change.
+
+### Undo
+
+- The campaign brief and the brand kit are not part of undo.
+- Text boxes keep the browser's own typing undo.
+- The caption, hashtags, first comment and alt text boxes each add one undo step per visit, written when the person leaves the box.
+
+### AI
+
+- Before every send, a panel shows exactly what will be sent, with a Send button. The MVP has no "don't show again" option.
+- The image sent for alt text is a reduced copy of the card's finished picture with metadata removed, never the original file.
+- There is no default provider. The user chooses one in Settings.
+- Keys are kept in this browser on this computer only, never in session files, exports or logs. Settings has a visible "Remove key" button.
+- Before any adapter is built, confirm that each provider allows calls straight from a web page with the user's own key.
+
+### Carousels
+
+- Alt text is per slide. Background colour is per carousel.
+- Slide image files are named like single images, with a two-digit slide number added after the card id, starting at `_01`: `{session}_{platform}_{placement}_{cardId}_01.{ext}`.
+- `captions.csv` keeps its rule of one row per file written. Each slide file gets its own row, with the carousel's caption repeated.
+- A LinkedIn document carousel exports its slides as one PDF, so it is one file: it is named like a single image, with no slide number, and gets one row in `captions.csv`.
+
+### Padding
+
+- One-sided padding (the photo at the top of the frame, with an empty band below it for text) is planned for Phase 2, before the text editor task. It is recorded here as planned only: the "Crop limits" rules above are unchanged until the task that builds it.
+- A transparent background for padded PNG exports is parked. It is not in Phase 2.
+
+### Compare view
+
+- The compare view stays in Phase 3.
+
+### Phase 2 task order
+
+1. This cleanup: the error-text colour, the CLAUDE.md fixes and these decisions.
+2. Caption, hashtags and first comment boxes.
+3. Alt text box.
+4. Campaign brief panel.
+5. AI settings with the first provider, starting with the browser-call check.
+6. The other two providers.
+7. AI alt text, with the "what is sent" panel.
+8. AI captions with tone.
+9. Shorten-to-fit and change-tone.
+10. Brand kit colours and voice.
+11. Brand logo and font files.
+12. Overlays drawn in the preview and the export, including every style field (font, colour, alignment, shadow), with a preview-versus-export pixel check.
+13. One-sided padding.
+14. Text box editing.
+15. Style controls.
+16. Safe-zone guide and snapping.
+17. Logo on a card.
+18. Carousel builder.
+19. Per-slide editing.
+20. Carousel export: numbered images and the LinkedIn PDF.
+21. README and the real-week-of-posts checklist.
+
+### Still open
+
+Phase 2 questions this spec does not yet answer:
+
+- [ ] Tone: one setting for the whole session (`Brief.tone`), or one per platform ("Formal for LinkedIn, lighter for Instagram")?
+- [ ] AI usage counter: where is it stored, and what does it count?
+- [ ] Cover slide: what does choosing a carousel's cover slide (`coverIndex`) change?
+- [ ] LinkedIn document carousel: alt text is per slide, but the PDF is one file with one row in `captions.csv`. Where does each slide's alt text go?
+- [ ] Placements with no caption (the Story placements): are the caption, hashtags and first comment boxes shown for them?
+- [ ] Voice document: is the 500-word limit enforced, or only advised?
+- [ ] Overlay presets: which settings does a preset hold?
+- [ ] Carousel focal point: a card's own focal point is a single point, but a carousel has several photos. How do the two fit together?
+- [ ] Brand bundle: what is the exported file called, and what is its file type?
+
 ## Build phases and MVP scope
 
 The MVP is Phases 1 and 2: images only, Instagram and LinkedIn, AI copy, brand kit, board with validation, session save, export. Video is deliberately Phase 3 so the pipeline, data model, and board are solid before the hardest technical piece lands.
@@ -320,7 +431,7 @@ The MVP is Phases 1 and 2: images only, Instagram and LinkedIn, AI copy, brand k
 | --- | --- | --- |
 | 1: Foundation | Import, data model, session save and load, image crop and resize, validator, board. Instagram + LinkedIn. | One photo becomes two valid files; session survives a browser reload |
 | 2: Copy + brand | AI adapters for 3 vendors, captions, alt text, brand kit, overlays, carousel, export. MVP complete. | Marketing uses it for a real week of posts without opening Canva |
-| 3: Video | Trim, reframe, cover frame, WebCodecs export, auto-captions, duplicate and compare. Reels + LinkedIn video. | A 60-second iPhone clip becomes a validated Reel in under a minute on an office laptop |
+| 3: Video | Trim, reframe, cover frame, WebCodecs export, auto-captions, compare. Reels + LinkedIn video. | A 60-second iPhone clip becomes a validated Reel in under a minute on an office laptop |
 | 4: Team use | Status and comments, templates, previews, collage, repurpose, proof sheet PDF. Facebook + X. | |
 
 Each gate is a test the user runs, not a code milestone.
@@ -342,13 +453,13 @@ Not in any phase: direct publishing to platforms, analytics, AI image or video g
 
 Open questions to settle before or during Phase 1:
 
-- [ ] Hosting: run from a local folder or from a static web host? A hosted URL is simplest for the team; the app still needs no server.
+- [x] Hosting: decided. The app is served from a static web host (GitHub Pages).
 - [ ] Brand kit ownership: who maintains `brand.json` and the voice document for each brand or company the team serves? One brand file per company, switchable in Settings?
-- [ ] AI vendor default: which provider does the team already pay for? Default to it in Settings.
+- [x] AI vendor default: decided. There is no default provider; the user chooses one in Settings.
 - [ ] Photo release tracking: does marketing need a per-asset "release on file" flag for images with identifiable people? Cheap to add in Phase 1 if yes.
-- [ ] Font licensing: are the brand fonts licensed for embedding in exported images? If not, fall back to Google Fonts equivalents.
+- [ ] Font licensing: are the brand fonts licensed for embedding in exported images? If not, use the bundled Inter and Inter Tight. Fonts are never fetched from a font service.
 - [ ] Session location: default to a `Social Content Studio` folder in Documents, or ask every time?
-- [ ] Key storage on shared computers: API keys are kept in browser IndexedDB. Confirm this is acceptable where several people share one computer, or require a key per user login.
+- [x] Key storage on shared computers: decided. Keys are kept in this browser on this computer only, and Settings has a visible "Remove key" button.
 
 ## Kickoff prompt for Claude Code
 

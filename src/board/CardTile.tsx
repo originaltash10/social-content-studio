@@ -107,7 +107,7 @@ export function CardTile(props: CardTileProps) {
       {shown?.upscaled && (
         <p className="text-label text-ink-secondary">{upscaledNote(shown.width, shown.height)}</p>
       )}
-      {render?.kind === 'failed' && <p className="text-label text-red-700">{render.message}</p>}
+      {render?.kind === 'failed' && <p className="text-label text-danger-text">{render.message}</p>}
       {render?.kind === 'cancelled' && (
         <p className="text-label text-ink-secondary">{CANCELLED_TEXT}</p>
       )}

@@ -209,7 +209,7 @@ export function Editor({
   }
   if (state.kind === 'failed') {
     return (
-      <p role="alert" className="rounded-control bg-page p-4 text-red-700">
+      <p role="alert" className="rounded-control bg-page p-4 text-danger-text">
         {state.message}
       </p>
     );
