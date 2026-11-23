@@ -82,7 +82,7 @@ export function SessionPanel() {
 
   const statusColor =
     status?.kind === 'error'
-      ? 'text-red-700'
+      ? 'text-danger-text'
       : status?.kind === 'warning'
         ? 'text-amber-700'
         : 'text-ink-secondary';

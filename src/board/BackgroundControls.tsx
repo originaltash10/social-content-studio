@@ -171,7 +171,7 @@ export function BackgroundControls({
         </label>
       </div>
       {/* Always there, two lines high, so a message appearing moves nothing in the dialog. */}
-      <p id={messageId} aria-live="polite" className="min-h-8 text-label text-red-700">
+      <p id={messageId} aria-live="polite" className="min-h-8 text-label text-danger-text">
         {message}
       </p>
     </fieldset>

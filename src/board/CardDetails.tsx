@@ -124,7 +124,7 @@ export function CardDetails({
           )}
           {/* With a Rendered file area, a failure is said there instead, in the file's place. */}
           {render?.kind === 'failed' && !hasFileArea && (
-            <p className="text-red-700">{render.message}</p>
+            <p className="text-danger-text">{render.message}</p>
           )}
 
           <section aria-label="Checks" className="flex flex-col gap-2">

@@ -274,7 +274,9 @@ export function ExportPanel({
               <h3 ref={resultsHeading} tabIndex={-1} className="font-heading font-semibold">
                 Export results
               </h3>
-              <p className={finished.failed ? 'text-red-700' : undefined}>{finished.headline}</p>
+              <p className={finished.failed ? 'text-danger-text' : undefined}>
+                {finished.headline}
+              </p>
               {finished.notes.map((note) => (
                 <p key={note} className="text-ink-secondary">
                   {note}

@@ -31,6 +31,7 @@
   --color-highlight-text: #c53b00;
   --color-success: #1b9c63;
   --color-success-text: #157b4e;
+  --color-danger-text: #c10007;
 
   /* Fonts: Inter for body text, Inter Tight for headings and numbers */
   --font-sans:

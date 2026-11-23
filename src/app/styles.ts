@@ -18,7 +18,7 @@ export const buttonClass = `${buttonBase} border-muted bg-surface text-ink enabl
 export const resultTextClass = {
   pass: 'text-success-text',
   warn: 'text-highlight-text',
-  fail: 'text-red-700',
+  fail: 'text-danger-text',
   unchecked: 'text-muted-text',
 } as const;
 
