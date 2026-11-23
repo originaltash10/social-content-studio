@@ -1314,13 +1314,15 @@ describe('undo in the dialog', () => {
     expect(client.calls).toHaveLength(1);
     fireEvent.input(picker, { target: { value: '#112233' } });
     expect(padding().style.backgroundColor).toBe('rgb(17, 34, 51)');
-    // Closed with no change: the editor goes back to the card's colour.
+    // Escape: Chrome puts the card's colour back in the picker, so closing it changes nothing.
+    fireEvent.input(picker, { target: { value: '#ffffff' } });
     fireEvent(picker, new Event('cancel', { bubbles: true }));
     expect(padding().style.backgroundColor).toBe('rgb(255, 255, 255)');
     expect(store().undoStack).toHaveLength(before.steps);
-    // Closed on a new colour: one step, and the card is rendered again in that colour.
+    // Closed on a new colour by focus leaving it, with no change event: one step, and the card
+    // is rendered again in that colour.
     fireEvent.input(picker, { target: { value: '#0a7f5c' } });
-    fireEvent(picker, new Event('change', { bubbles: true }));
+    fireEvent.blur(picker);
     expect(store().session?.cards[0]?.background).toBe('#0a7f5c');
     expect(store().undoStack).toHaveLength(before.steps + 1);
     expect(padding().style.backgroundColor).toBe('rgb(10, 127, 92)');

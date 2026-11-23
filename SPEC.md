@@ -295,7 +295,7 @@ Editor:
 
 Card details shows a Background colour control for every card the editor can open, with a short note that the colour fills any space where the crop goes past the photo's edges. It has the browser's colour picker and a labelled text box showing the hex code:
 
-- Colour picker: the editor shows each colour as it is tried, and the card is changed once, as one undo step, when the picker reports its change. If the picker closes with no change there is no undo step and the editor goes back to the card's colour.
+- Colour picker: the editor shows each colour as it is tried. Whatever colour the picker shows when it closes is kept, however it closes: a click outside it, Enter, the picker's own controls, or the dialog losing focus. It is one undo step if it differs from the card's colour, and no undo step if it is the same. Each opening of the picker gives at most one undo step, even when the browser reports both a change and a loss of focus. Escape puts back the colour the picker opened with, so it changes nothing.
 - Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
 - Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
 
