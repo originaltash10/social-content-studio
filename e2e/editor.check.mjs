@@ -1403,6 +1403,10 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
       await openEditor(other, FEED_CARD);
       const sideOpen = await firstCard();
       await closeEditor(other);
+      // The page is let go by the dialog's close event, which the browser sends a moment after
+      // the dialog is hidden. Until then the page is still locked and its scrollbar measures
+      // as no width at all, so the measurement waits for the page to be let go.
+      await other.waitForFunction(() => document.documentElement.style.overflow !== 'hidden');
       const sideAfter = await firstCard();
       check(
         'with scrollbars that take up room, opening and closing the dialog does not move the board sideways',
