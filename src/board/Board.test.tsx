@@ -212,7 +212,9 @@ describe('creating cards', () => {
     expect(within(form).getByRole('group', { name: 'LinkedIn' })).toBeInTheDocument();
     expect(within(form).queryByRole('group', { name: 'Facebook' })).toBeNull();
     expect(within(form).queryByRole('group', { name: 'X' })).toBeNull();
-    expect(within(form).queryByRole('checkbox', { name: /Carousel|Reel|Video/ })).toBeNull();
+    // No carousel or video-only placement. A whole label is matched, since "Reel / Story" is a
+    // photo placement that is offered.
+    expect(within(form).queryByRole('checkbox', { name: /^(Carousel|Reel|Video) \(/ })).toBeNull();
     const size = sizeOf(FEED);
     expect(
       within(form).getByRole('checkbox', {
@@ -318,6 +320,39 @@ describe('creating cards', () => {
     expect(screen.queryByRole('form', { name: 'Create cards' })).toBeNull();
     expect(button('Create cards')).toHaveFocus();
     expect(button('Create cards')).toHaveAttribute('aria-expanded', 'false');
+  });
+});
+
+describe('the Instagram placement labelled Reel / Story', () => {
+  it('shows its label from platforms.json everywhere, and keeps the key "story"', async () => {
+    const spec = getPlacement('instagram', 'story') as PlacementSpec;
+    expect(spec.label).toBe('Reel / Story');
+    const size = sizeOf(spec);
+    openSession(PHOTO);
+    renderBoard();
+    fireEvent.click(button('Create cards'));
+    const form = screen.getByRole('form', { name: 'Create cards' });
+    // In the placement picker, with its size.
+    expect(
+      within(form).getByRole('checkbox', {
+        name: `Reel / Story (${size.width} × ${size.height})`,
+      }),
+    ).toBeInTheDocument();
+    fireEvent.click(button('Create cards'));
+    createCards('Reel / Story');
+    // The key is what is stored, so saved sessions and export names are unchanged.
+    expect(store().session?.cards.map((c) => c.placement)).toEqual(['story']);
+    await sent(1);
+    answer(0);
+    await idle();
+    // On the card tile, its preview, and the card dialog.
+    const tile = article('Instagram Reel / Story for site.jpg, v1');
+    expect(within(tile).getByRole('img')).toHaveAttribute(
+      'alt',
+      'Preview of site.jpg for Instagram Reel / Story',
+    );
+    fireEvent.click(button('Open Instagram Reel / Story for site.jpg, v1'));
+    expect(screen.getByRole('dialog', { name: 'Instagram Reel / Story' })).toBeInTheDocument();
   });
 });
 

@@ -592,10 +592,18 @@ describe('rule 6: carousel slides', () => {
 
 describe('rule 7: Story and Reel unsafe zones', () => {
   const insets = find('with an insets safe zone', (p) => p.safeZone?.kind === 'insets');
-  const centered = find(
-    'with a centered-area safe zone',
-    (p) => p.safeZone?.kind === 'centered-area',
-  );
+  // No placement in platforms.json has a centered-area zone now, so the validator's
+  // centered-area path is tested on a placement from the file with a made-up zone: the frame's
+  // full width and 80% of its height, centred.
+  const reelStory = find('for the Instagram story key', (p) => p.placement === 'story');
+  const centered: PlacementSpec = {
+    ...reelStory,
+    safeZone: {
+      kind: 'centered-area',
+      width: firstSize(reelStory).width,
+      height: Math.round(firstSize(reelStory).height * 0.8),
+    },
+  };
 
   it('passes when overlays, logo, and focal point are inside the safe area', () => {
     expect(issuesFor(7, validInput(insets), insets)).toEqual([]);
@@ -666,6 +674,69 @@ describe('rule 7: Story and Reel unsafe zones', () => {
   it('is skipped with nothing placed', () => {
     const input = validInput(insets, { overlays: undefined, logo: undefined, focal: undefined });
     expect(issuesFor(7, input, insets)).toEqual([]);
+  });
+});
+
+describe('rule 7 on the Instagram placement labelled Reel / Story', () => {
+  const spec = find(
+    'for Instagram with the story key',
+    (p) => p.platform === 'instagram' && p.placement === 'story',
+  );
+  const reel = find(
+    'for Instagram with the reel key',
+    (p) => p.platform === 'instagram' && p.placement === 'reel',
+  );
+  const frame = firstSize(spec);
+  const focalIssues = (placement: PlacementSpec, focal: { x: number; y: number }) =>
+    issuesFor(7, validInput(placement, { focal, overlays: [], logo: undefined }), placement);
+
+  it('is labelled "Reel / Story" and keeps the key "story"', () => {
+    expect(spec.label).toBe('Reel / Story');
+    expect(spec.placement).toBe('story');
+    expect(spec.mediaTypes).toContain('image');
+  });
+
+  it("has a safe area inside the Instagram Reel's, from platforms.json", () => {
+    const own = safeRect(spec.safeZone as NonNullable<PlacementSpec['safeZone']>, frame);
+    const reels = safeRect(reel.safeZone as NonNullable<PlacementSpec['safeZone']>, frame);
+    expect(own.x).toBeGreaterThanOrEqual(reels.x);
+    expect(own.y).toBeGreaterThanOrEqual(reels.y);
+    expect(own.x + own.width).toBeLessThanOrEqual(reels.x + reels.width);
+    expect(own.y + own.height).toBeLessThanOrEqual(reels.y + reels.height);
+  });
+
+  it('warns for a focal point wherever the Instagram Reel would warn', () => {
+    const steps = 50;
+    let warned = 0;
+    for (let i = 0; i <= steps; i++) {
+      for (let j = 0; j <= steps; j++) {
+        const focal = { x: i / steps, y: j / steps };
+        if (focalIssues(reel, focal).length === 0) continue;
+        warned++;
+        expect(focalIssues(spec, focal)).toHaveLength(1);
+      }
+    }
+    expect(warned).toBeGreaterThan(0);
+  });
+
+  it("warns, naming the placement, in each of the Reel's insets", () => {
+    const zone = reel.safeZone as Extract<PlacementSpec['safeZone'], { kind: 'insets' }>;
+    for (const focal of [
+      { x: 0.5, y: zone.top / 2 },
+      { x: 0.5, y: 1 - zone.bottom / 2 },
+      { x: zone.left / 2, y: 0.5 },
+      { x: 1 - zone.right / 2, y: 0.5 },
+    ]) {
+      const issues = focalIssues(spec, focal);
+      expect(issues).toEqual([expect.objectContaining({ level: 'warn' })]);
+      expect(issues[0]?.message).toBe(
+        'In the Reel / Story unsafe zone, where app UI may cover it: focal point.',
+      );
+    }
+  });
+
+  it('passes a focal point in the middle of the frame', () => {
+    expect(focalIssues(spec, { x: 0.5, y: 0.5 })).toEqual([]);
   });
 });
 
