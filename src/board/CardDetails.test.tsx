@@ -375,3 +375,34 @@ describe('the rendered file while the card is rendered again', () => {
     expect(fileRow()).toHaveTextContent('Not made yet');
   });
 });
+
+describe('the post text boxes', () => {
+  it('follow the checks on a card without the editor', () => {
+    openWith(PASS);
+    const checks = screen.getByRole('region', { name: 'Checks' });
+    const text = screen.getByRole('region', { name: 'Post text' });
+    expect(checks.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(text).getByLabelText('Caption')).toHaveValue('Topping out this week.');
+    expect(within(text).getByLabelText('Hashtags')).toHaveValue('#construction #toppingout');
+    expect(within(text).getByLabelText('First comment')).toHaveValue('More on our site.');
+  });
+
+  it('are shown on a card with the editor too, before its background colour', () => {
+    render(
+      <CardDetails
+        card={makeCard({ assetIds: [PHOTO.id], validation: PASS })}
+        name="Instagram Feed vertical"
+        fileName="site.jpg"
+        render={undefined}
+        version={{ version: 1, copyIndex: 1, copyCount: 1, isCopy: false, parentVersion: null }}
+        headingId="details"
+        editor={<div>The editor</div>}
+      />,
+    );
+    const text = screen.getByRole('region', { name: 'Post text' });
+    const background = screen.getByRole('group', { name: /background/i });
+    expect(
+      text.compareDocumentPosition(background) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+});

@@ -677,6 +677,28 @@ describe('the details dialog', () => {
     return { opener, dialog: dialog as HTMLDialogElement };
   }
 
+  it('updates the badge and the tile reason once caption text is written on leaving its box', async () => {
+    const { dialog } = await openDetails();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    const cap = FEED.captionCap as number;
+    const box = within(dialog).getByLabelText('Caption');
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: 'a'.repeat(cap + 1) } });
+    // While typing, the box says so, but nothing is written and the card's result is unchanged.
+    expect(within(dialog).getByText(/^Caption is \d/)).toBeInTheDocument();
+    expect(store().session?.cards[0]?.copy.caption).toBe('');
+    expect(within(article(label)).queryByText(/^Caption is/)).toBeNull();
+    expect(within(article(label)).getByText('Warning')).toBeInTheDocument();
+
+    fireEvent.blur(box);
+    await idle();
+    expect(store().session?.cards[0]?.copy.caption).toBe('a'.repeat(cap + 1));
+    expect(within(article(label)).getByText('Fail')).toBeInTheDocument();
+    expect(within(article(label)).getByText(/^Caption is \d/)).toHaveClass('text-danger-text');
+    const checks = within(dialog).getByRole('region', { name: 'Checks' });
+    expect(within(checks).getAllByRole('listitem')[0]).toHaveTextContent(/^Fail: Caption is /);
+  });
+
   it('opens as a modal with the file, the version and every check', async () => {
     const { dialog } = await openDetails();
     expect(dialog.open).toBe(true);

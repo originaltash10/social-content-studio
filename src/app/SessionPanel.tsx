@@ -18,7 +18,7 @@ import {
 } from '../store/persistence';
 import { useSessionStore } from '../store/sessionStore';
 import { isTyping } from './keys';
-import { buttonClass, focusClass, primaryButtonClass } from './styles';
+import { buttonClass, primaryButtonClass, textFieldClass } from './styles';
 
 const DISCARD_PROMPT = 'The open session has unsaved changes. Discard them and continue?';
 const CLEAR_PROMPT =
@@ -93,7 +93,7 @@ export function SessionPanel() {
         <label className="flex items-center gap-2">
           Name
           <input
-            className={`rounded-control border border-muted bg-surface px-2 py-1 text-ink ${focusClass}`}
+            className={textFieldClass}
             value={name}
             onChange={(event) => setName(event.target.value)}
           />
