@@ -858,3 +858,41 @@ describe('charCount', () => {
     expect(charCount('👷')).toBe(1);
   });
 });
+
+describe('rules 4 and 5 on the Instagram placement labelled Reel / Story', () => {
+  // Reels post the caption, so this placement takes the Instagram feed's caption and hashtag
+  // limits from platforms.json (SPEC.md, "Caption boxes").
+  const spec = find(
+    'for Instagram with the story key',
+    (p) => p.platform === 'instagram' && p.placement === 'story',
+  );
+  const feed = find(
+    'for Instagram feed vertical',
+    (p) => p.platform === 'instagram' && p.placement === 'feed-vertical',
+  );
+  const captionCap = spec.captionCap as number;
+  const hashtagCap = spec.hashtagCap as number;
+  const tags = (n: number) => Array.from({ length: n }, (_, i) => `tag${i}`);
+
+  it('uses the Instagram feed caption and hashtag limits', () => {
+    expect(spec.captionCap).toBe(feed.captionCap);
+    expect(spec.hashtagCap).toBe(feed.hashtagCap);
+    expect(spec.hashtagsInCaption).toBe(feed.hashtagsInCaption);
+    expect(spec.captionCap).not.toBeNull();
+    expect(spec.hashtagCap).not.toBeNull();
+  });
+
+  it('passes rule 4 at the caption cap and fails one character over', () => {
+    const at = validInput(spec, { caption: 'a'.repeat(captionCap) });
+    const over = validInput(spec, { caption: 'a'.repeat(captionCap + 1) });
+    expect(issuesFor(4, at, spec)).toEqual([]);
+    expect(issuesFor(4, over, spec)).toEqual([expect.objectContaining({ rule: 4, level: 'fail' })]);
+  });
+
+  it('passes rule 5 at the hashtag cap and fails one tag over', () => {
+    const at = validInput(spec, { hashtags: tags(hashtagCap) });
+    const over = validInput(spec, { hashtags: tags(hashtagCap + 1) });
+    expect(issuesFor(5, at, spec)).toEqual([]);
+    expect(issuesFor(5, over, spec)).toEqual([expect.objectContaining({ rule: 5, level: 'fail' })]);
+  });
+});

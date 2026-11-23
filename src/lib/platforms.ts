@@ -157,7 +157,7 @@ function checkPlacement(
   if (e.maxImages !== null && !isPosInt(e.maxImages))
     err(`${p}.maxImages`, 'must be a positive integer or null');
 
-  for (const k of ['captionLinksClickable', 'hashtagsInCaption'] as const) {
+  for (const k of ['captionLinksClickable', 'hashtagsInCaption', 'canBeStory'] as const) {
     if (typeof e[k] !== 'boolean') err(`${p}.${k}`, 'must be true or false');
   }
 

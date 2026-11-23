@@ -69,6 +69,15 @@ describe('platforms.json (the real file)', () => {
   });
 });
 
+describe('canBeStory in platforms.json', () => {
+  it('is true for the Instagram and Facebook story placements only', () => {
+    const stories = platforms.placements
+      .filter((p) => p.canBeStory)
+      .map((p) => `${p.platform}/${p.placement}`);
+    expect(stories.sort()).toEqual(['facebook/story', 'instagram/story']);
+  });
+});
+
 describe('getPlacement', () => {
   it('finds a placement by platform and key', () => {
     const first = at(platforms.placements, 0);
@@ -158,6 +167,16 @@ describe('parsePlatforms rejects bad edits', () => {
     const d = clone();
     at(d.placements, 0).captionCap = '2200';
     expect(problemsFor(d)).toEqual([expect.stringMatching(/captionCap/)]);
+  });
+
+  it('rejects a missing or non-boolean canBeStory', () => {
+    const d = clone();
+    delete at(d.placements, 0).canBeStory;
+    at(d.placements, 1).canBeStory = 'yes';
+    expect(problemsFor(d)).toEqual([
+      expect.stringMatching(/placements\[0\]\.canBeStory: must be true or false/),
+      expect.stringMatching(/placements\[1\]\.canBeStory: must be true or false/),
+    ]);
   });
 
   it('lists every problem, not just the first', () => {
