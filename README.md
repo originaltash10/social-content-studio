@@ -39,6 +39,9 @@ the images as files. The app as a whole is not finished. What works today:
   duplicated card has its own marker: moving it changes only that card, and moving the photo's
   marker does not change the duplicate.
   Reset crop puts a card back to that automatic crop, and Ctrl/Cmd-Z reverses your last change.
+  Fit whole photo shows all of the photo in the placement's shape instead of cropping it, and
+  fills the space around it with the card's background colour, which is white unless you pick
+  another under Background colour in Card details.
   Cropping in closely enlarges the picture, so the app stops at twice the size and adds a note
   when a picture has been enlarged.
 - **File type and quality.** Open a card to choose whether its image is saved as a JPG or a PNG.
