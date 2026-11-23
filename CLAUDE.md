@@ -14,14 +14,16 @@ Keep each task to one feature row from the SPEC feature table.
 - No backend. Everything runs in the browser; only AI provider calls leave the machine.
 - API keys are stored only in IndexedDB. They are never written into a session file, never logged,
   and sent only to that provider's API endpoint.
-- Asset files are immutable once imported; only the focal point can be changed afterwards, and
-  every other change happens on a card.
+- Asset files are immutable once imported: a photo's file and its pixels never change. Two things
+  can be set afterwards: the focal point, and a cached AI description of the photo. Every other
+  change happens on a card.
 - `session.json`, `brand.json` and `.scs` bundles are written only through the allowlist
   serializers in `src/lib/session/serialize.ts`. A new field on `Session` or `BrandKit` must be
   added there or it is not saved.
 - A session folder is only ever written with the session it was opened or chosen for, and clearing
   a session deletes nothing on disk.
-- Coverage for `src/lib/session`, `src/lib/export` and `src/store` must stay at 100%
+- Coverage for `src/lib/session`, `src/store`, `src/lib/validate.ts`, `src/lib/image`,
+  `src/lib/render`, `src/lib/board`, `src/lib/editor` and `src/lib/export` must stay at 100%
   (`npm run coverage`).
 - The validator (`src/lib/validate.ts`) must keep pass and fail tests for all nine rules in SPEC.md.
 - Supported browsers: Chrome and Edge only (WebCodecs, File System Access API).
@@ -38,7 +40,7 @@ Keep each task to one feature row from the SPEC feature table.
 | Framework        | React 18, TypeScript (strict + `noUncheckedIndexedAccess`), Vite        |
 | State            | Zustand with Immer; single session store, snapshot-based undo (50)      |
 | Styling          | Tailwind CSS v4 (via `@tailwindcss/vite`)                               |
-| Canvas           | Plain elements, pointer events (Phase 1); Fabric.js decided in Phase 2  |
+| Canvas           | Plain elements, pointer events; own overlay code, no Fabric.js or Konva |
 | Image processing | OffscreenCanvas in a Web Worker, `createImageBitmap`                    |
 | HEIC decode      | `heic-to` or `libheif-js`                                               |
 | Video            | WebCodecs via `mediabunny`; ffmpeg.wasm only as fallback (Phase 3)      |
@@ -47,6 +49,9 @@ Keep each task to one feature row from the SPEC feature table.
 | Export           | Stream to session `exports/`; JSZip download fallback                   |
 | Tests            | Vitest (jsdom) for lib and validator; Playwright for board flow (later) |
 | Lint / format    | ESLint flat config + typescript-eslint (strict), Prettier               |
+
+Overlays (text and logo) are drawn by one function in `src/lib/render`, used for both the editor
+preview and the exported file. No canvas library is used.
 
 ## Layout
 
