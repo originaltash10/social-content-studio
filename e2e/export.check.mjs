@@ -44,6 +44,10 @@
  * comment are typed into a card's boxes, reached with Tab, and exported as a zip; the card's row
  * in captions.csv holds exactly that text, with the hashtags as the export writes them.
  *
+ * Then, in a new session, the campaign brief (`runBriefExport`): text found nowhere else is typed
+ * into all five brief fields, and neither a zip export nor a folder export holds any of it, in
+ * captions.csv, in a file name or in a file's bytes.
+ *
  * Like the other checks in this folder, it needs Playwright with Chromium already installed on
  * the machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is
  * written inside the repository except the normal `dist` build.
@@ -1192,6 +1196,178 @@ async function runCopyExport(browser, name, url) {
   return checks.every((c) => c.ok);
 }
 
+/**
+ * The campaign brief is never exported (SPEC.md, "Campaign brief panel"). In a new session, text
+ * found nowhere else is typed into all five brief fields (the tone is set to Casual, which is
+ * not the default), and both kinds of export are made. No piece of that text is in captions.csv,
+ * in any exported file's name, or in any exported file's bytes, although session.json holds
+ * every piece.
+ */
+const BRIEF_MARKERS = {
+  topic: 'ZZ-TOPIC-4417',
+  audience: 'ZZ-AUDIENCE-5528',
+  cta: 'ZZ-CTA-6639',
+  link: 'https://zz-link-7741.example/path',
+  tone: 'casual',
+};
+
+async function runBriefExport(browser, name, url) {
+  console.log(`\n== Export check, campaign brief: ${name} (${url})`);
+  const context = await browser.newContext({ acceptDownloads: true });
+  // A step whose control is missing fails after this long.
+  context.setDefaultTimeout(10_000);
+  await context.addInitScript(folderStandIn, OPFS_FOLDER);
+  const problems = [];
+  context.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+  });
+  context.on('requestfailed', (request) => problems.push(`request failed: ${request.url()}`));
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  page.on('dialog', (dialog) => dialog.accept());
+
+  const checks = [];
+  const check = (title, ok, detail = '') => {
+    checks.push({ title, ok, detail });
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${title}${detail ? `: ${detail}` : ''}`);
+  };
+  const markers = [...Object.values(BRIEF_MARKERS), 'zz-link-7741', 'ZZ-'];
+  /** The markers found in a piece of text, whatever their case. */
+  const found = (text) =>
+    markers.filter((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+  /** The markers found in a set of exported files: in a path, or in the bytes read three ways. */
+  const foundIn = (files) => {
+    const hits = [];
+    for (const [path, bytes] of files) {
+      for (const marker of found(path)) hits.push(`${marker} in the name ${path}`);
+      for (const encoding of ['latin1', 'utf-8', 'utf-16le']) {
+        for (const marker of found(new TextDecoder(encoding).decode(bytes))) {
+          hits.push(`${marker} in ${path} (${encoding})`);
+        }
+      }
+    }
+    return hits;
+  };
+
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    // The session name is typed over the one already there: a real click, select all, then keys.
+    await page.getByLabel('Name').click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type(SESSION_NAME);
+    await page.getByRole('button', { name: 'New session' }).click();
+    // The system's file picker cannot be driven, so the file is given to the input directly.
+    await page.getByLabel('Photos to import').setInputFiles({
+      name: PHOTO,
+      mimeType: 'image/jpeg',
+      buffer: await makePhoto(page),
+    });
+    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+    await page.getByRole('button', { name: 'Create cards' }).click();
+    const form = page.getByRole('form', { name: 'Create cards' });
+    await form.getByRole('checkbox', { name: /^Feed vertical \(/ }).check();
+    await form.getByRole('checkbox', { name: /^Image post square \(/ }).check();
+    await form.getByRole('button', { name: 'Create' }).click();
+    await page
+      .getByRole('status', { name: 'Render progress' })
+      .filter({ hasText: /^Rendered 2 cards: / })
+      .waitFor({ timeout: 60_000 });
+
+    // The brief: Topic is reached with a real click, the rest with Tab, and the tone with an
+    // arrow key (Neutral to Casual).
+    const panel = page.getByRole('region', { name: 'Campaign brief', exact: true });
+    await panel.getByRole('textbox', { name: 'Topic', exact: true }).click();
+    await page.keyboard.type(BRIEF_MARKERS.topic);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type(BRIEF_MARKERS.audience);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type(BRIEF_MARKERS.cta);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type(BRIEF_MARKERS.link);
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('ArrowRight');
+    const toneChosen = await panel.getByRole('radio', { name: 'Casual', exact: true }).isChecked();
+
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await page
+      .getByRole('status')
+      .filter({ hasText: /^Saved to folder/ })
+      .first()
+      .waitFor();
+    const sessionJson = await page.evaluate(async (folderName) => {
+      const opfs = await navigator.storage.getDirectory();
+      const folder = await opfs.getDirectoryHandle(folderName);
+      return (await (await folder.getFileHandle('session.json')).getFile()).text();
+    }, OPFS_FOLDER);
+    const storedBrief = JSON.parse(sessionJson).brief;
+    check(
+      'the saved session.json holds the marker text in all five brief fields, with the tone Casual',
+      toneChosen && JSON.stringify(storedBrief) === JSON.stringify(BRIEF_MARKERS),
+      JSON.stringify(storedBrief),
+    );
+
+    const results = page.getByRole('region', { name: 'Export results' });
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download as .zip' }).click(),
+    ]);
+    const zipPath = join(outDir, `${name}-brief.zip`);
+    await download.saveAs(zipPath);
+    await results.waitFor({ timeout: 60_000 });
+    const zip = await JSZip.loadAsync(readFileSync(zipPath));
+    const zipFiles = new Map();
+    for (const [entry, file] of Object.entries(zip.files)) {
+      if (!file.dir) zipFiles.set(entry, Buffer.from(await file.async('uint8array')));
+    }
+    const zipHits = [...found(download.suggestedFilename()), ...foundIn(zipFiles)];
+    check(
+      'zip: no brief text is in captions.csv, in a file name or in a file',
+      zipFiles.size === 3 && zipFiles.has('captions.csv') && zipHits.length === 0,
+      `${[...zipFiles.keys()].sort().join(', ')}${zipHits.length ? `; found: ${zipHits.join('; ')}` : ''}`,
+    );
+
+    await page.getByRole('button', { name: 'Export to session folder' }).click();
+    await page.waitForFunction(
+      () =>
+        document.activeElement?.textContent === 'Export results' &&
+        !!document.querySelector('[aria-label="Export results"]'),
+      undefined,
+      { timeout: 60_000 },
+    );
+    const folderText = await results.innerText();
+    const folderFiles = await readExportsFolder(page);
+    const folderHits = foundIn(folderFiles);
+    check(
+      'folder: no brief text is in captions.csv, in a file name or in a file',
+      folderText.includes(`to the exports folder in folder "${OPFS_FOLDER}"`) &&
+        folderFiles.size === 3 &&
+        folderFiles.has('captions.csv') &&
+        folderHits.length === 0,
+      `${[...folderFiles.keys()].sort().join(', ')}${folderHits.length ? `; found: ${folderHits.join('; ')}` : ''}`,
+    );
+    check('no failed requests and no console errors', problems.length === 0, problems.join(' | '));
+    writeFileSync(
+      join(outDir, `${name}-brief-report.json`),
+      JSON.stringify({ checks, problems }, null, 2),
+    );
+  } catch (error) {
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
+  } finally {
+    await context.close();
+  }
+  return checks.every((c) => c.ok);
+}
+
 let failed = false;
 const browser = await chromium.launch();
 try {
@@ -1202,6 +1378,7 @@ try {
   failed = !(await runExportCheck(browser, 'dev', devUrl)) || failed;
   failed = !(await runPaddingExport(browser, 'dev', devUrl)) || failed;
   failed = !(await runCopyExport(browser, 'dev', devUrl)) || failed;
+  failed = !(await runBriefExport(browser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -1218,6 +1395,7 @@ try {
   failed = !(await runExportCheck(browser, 'production', siteUrl)) || failed;
   failed = !(await runPaddingExport(browser, 'production', siteUrl)) || failed;
   failed = !(await runCopyExport(browser, 'production', siteUrl)) || failed;
+  failed = !(await runBriefExport(browser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);
