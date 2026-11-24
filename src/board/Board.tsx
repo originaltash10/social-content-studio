@@ -191,7 +191,7 @@ export function Board({
       // The browser puts focus on the first control it finds, which is past the editor while
       // the photo is still being opened. Start at the heading instead, so Tab goes through the
       // dialog from the top: crop area, focal point, Reset crop, Fit whole photo, background
-      // colour, file type, and Close last.
+      // colour, file type, the caption boxes, and Close last.
       document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
       // In a short window that first control can be below the fold, and the browser scrolls
       // the dialog down to it before the focus is moved. Start at the top of the dialog too.

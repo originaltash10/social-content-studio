@@ -1333,12 +1333,13 @@ describe('undo in the dialog', () => {
     const { dialog, stop } = await openFailing();
     /** What Tab reaches, in order: everything focusable that is not disabled. */
     const order = () =>
-      [...dialog.querySelectorAll<HTMLElement>('button, input, [tabindex="0"]')]
+      [...dialog.querySelectorAll<HTMLElement>('button, input, textarea, [tabindex="0"]')]
         .filter((element) => !(element as HTMLButtonElement).disabled)
         .map(
           (element) =>
             element.getAttribute('data-testid') ??
             element.getAttribute('aria-label')?.split('.')[0] ??
+            (element instanceof HTMLTextAreaElement ? element.labels[0]?.textContent : null) ??
             (element.closest('label')?.textContent || element.textContent),
         );
     const rest = [
@@ -1348,6 +1349,9 @@ describe('undo in the dialog', () => {
       'JPG',
       'PNG',
       'Quality',
+      'Caption',
+      'Hashtags',
+      'First comment',
       'Export this card even though it fails its checks',
       'Close',
     ];

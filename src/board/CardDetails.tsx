@@ -7,8 +7,8 @@
  * export unless overridden"). It stays visible while the override is ticked, so it can always be
  * unticked, even after the card stops failing.
  *
- * Every card shows its caption, hashtags and first comment boxes (CopyFields.tsx) after its
- * checks.
+ * Every card shows its caption, hashtags and first comment boxes (CopyFields.tsx), after its
+ * file settings and before the export override.
  *
  * A card the editor can open also shows its background colour, then its file type (JPG or PNG)
  * and JPG quality. A card without the editor (its photo is not in the session, or it is not a
@@ -149,13 +149,6 @@ export function CardDetails({
             )}
           </section>
 
-          <CopyFields
-            key={card.id}
-            card={card}
-            spec={getPlacement(card.platform, card.placement)}
-            record={record}
-          />
-
           {editor !== undefined && isImageEdit(card.edit) && (
             <>
               <BackgroundControls
@@ -167,6 +160,13 @@ export function CardDetails({
               <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
             </>
           )}
+
+          <CopyFields
+            key={card.id}
+            card={card}
+            spec={getPlacement(card.platform, card.placement)}
+            record={record}
+          />
 
           {(card.validation.level === 'fail' || card.overrideFail) && (
             <section aria-label="Export override" className="flex flex-col gap-1">

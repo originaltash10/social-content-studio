@@ -387,10 +387,10 @@ describe('the post text boxes', () => {
     expect(within(text).getByLabelText('First comment')).toHaveValue('More on our site.');
   });
 
-  it('are shown on a card with the editor too, before its background colour', () => {
+  it('are shown on a card with the editor too, after its file settings and before the override', () => {
     render(
       <CardDetails
-        card={makeCard({ assetIds: [PHOTO.id], validation: PASS })}
+        card={makeCard({ assetIds: [PHOTO.id], validation: FAIL })}
         name="Instagram Feed vertical"
         fileName="site.jpg"
         render={undefined}
@@ -400,9 +400,11 @@ describe('the post text boxes', () => {
       />,
     );
     const text = screen.getByRole('region', { name: 'Post text' });
-    const background = screen.getByRole('group', { name: /background/i });
-    expect(
-      text.compareDocumentPosition(background) & Node.DOCUMENT_POSITION_FOLLOWING,
-    ).toBeTruthy();
+    const fileType = screen.getByRole('group', { name: 'File type' });
+    const override = screen.getByRole('region', { name: 'Export override' });
+    const follows = (a: Node, b: Node) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(follows(fileType, text)).toBeTruthy();
+    expect(follows(text, override)).toBeTruthy();
   });
 });
