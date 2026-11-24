@@ -302,7 +302,7 @@ Card details shows a Background colour control for every card the editor can ope
 - Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
 - Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
 
-The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, export override, Close. Arrow keys on the crop never change any other control.
+The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, caption, hashtags, first comment, export override, Close. Arrow keys on the crop never change any other control.
 
 Rendering:
 
