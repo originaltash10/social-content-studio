@@ -48,7 +48,11 @@ describe('connectionMessage', () => {
     expect(connectionMessage('no-key')).toBe(
       'No key saved yet. Paste a key and press Save key first.',
     );
-    expect(connectionMessage('storage')).toBe("This browser couldn't read its saved settings.");
+    expect(connectionMessage('storage')).toBe(
+      "This browser couldn't read the saved key. Try saving it again.",
+    );
+    expect(connectionMessage('storage')).not.toBe(ACTION_MESSAGES.readFailed);
+    expect(ACTION_MESSAGES.readFailed).toBe("This browser couldn't read its saved settings.");
     expect(connectionMessage('wrong-key')).toBe(
       "Claude didn't accept this key. Check that you copied all of it, or create a new key in your provider account.",
     );

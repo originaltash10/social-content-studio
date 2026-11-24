@@ -56,7 +56,7 @@ export const chosenMessage = (providerName: string) => `${providerName} chosen.`
 const CONNECTION_MESSAGES: Record<Exclude<ConnectionResult, 'cancelled'>, string> = {
   ok: 'Connected. Claude accepted your key.',
   'no-key': 'No key saved yet. Paste a key and press Save key first.',
-  storage: ACTION_MESSAGES.readFailed,
+  storage: "This browser couldn't read the saved key. Try saving it again.",
   'wrong-key':
     "Claude didn't accept this key. Check that you copied all of it, or create a new key in your provider account.",
   'org-blocked':
