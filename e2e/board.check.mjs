@@ -16,7 +16,12 @@
  * reached by Tab from the dialog heading and typed into with the keyboard; the live counts; the
  * "…more" cut-off warning and the caption cap; Ctrl/Cmd-Z inside a box (the browser's typing
  * undo) and outside it (one undo step per visit); Esc keeping the text; the Story note on the
- * Reel / Story card only; and the boxes reached inside the dialog in a short window.
+ * Reel / Story card only; and the boxes reached inside the dialog in a short window. 8i–8q
+ * check the alt text box and the Copy buttons: the dialog's whole Tab order; alt text clearing
+ * the rule 8 warning in the dialog and on the tile, and one Ctrl-Z taking it back; each Copy
+ * button's clipboard text (read back through the clipboard, with a sentinel put there first),
+ * pressed with Enter, Space or a mouse click; "Nothing to copy yet."; the alt text kept through a
+ * page reload and .scs load; and the exported captions.csv alt_text and hashtags.
  *
  * Like e2e/image-worker.check.mjs, it needs Playwright with Chromium already installed on the
  * machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is written
@@ -62,6 +67,10 @@ const en = (n) => n.toLocaleString('en-US');
 /** The note under the boxes on a placement that can be a Story (SPEC.md, "Caption boxes"). */
 const STORY_NOTE =
   "Reels show this caption. Stories don't show captions, hashtags or a first comment.";
+/** The export override's label (src/board/CardDetails.tsx). */
+const OVERRIDE_LABEL = 'Export this card even though it fails its checks';
+/** Put on the clipboard before each Copy press; a Copy that writes nothing leaves it there. */
+const CLIPBOARD_SENTINEL = 'sentinel: not written by the app';
 
 const PHOTO = 'board-check.jpg';
 const label = (name, version = 'v1', file = PHOTO) => `${name} for ${file}, ${version}`;
@@ -195,6 +204,40 @@ async function createCards(page, ...placements) {
   await form.getByRole('button', { name: 'Create' }).click();
 }
 
+/**
+ * Splits CSV text (RFC 4180: quoted fields, doubled quotes, line breaks inside quotes) into rows
+ * of fields. A leading byte order mark is dropped.
+ */
+function parseCsv(text) {
+  const rows = [];
+  let row = [];
+  let field = '';
+  let quoted = false;
+  const body = text.startsWith('\u{FEFF}') ? text.slice(1) : text;
+  for (let i = 0; i < body.length; i++) {
+    const char = body[i];
+    if (quoted) {
+      if (char === '"' && body[i + 1] === '"') {
+        field += '"';
+        i++;
+      } else if (char === '"') quoted = false;
+      else field += char;
+    } else if (char === '"') quoted = true;
+    else if (char === ',') {
+      row.push(field);
+      field = '';
+    } else if (char === '\r' && body[i + 1] === '\n') {
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+      i++;
+    } else field += char;
+  }
+  if (field !== '' || row.length > 0) rows.push([...row, field]);
+  return rows;
+}
+
 /** The text of everything a control's aria-describedby points at, in order. */
 const describedText = (locator) =>
   locator.evaluate((element) =>
@@ -239,6 +282,10 @@ async function tabOutOfText(page, most = 20) {
 async function runBoard(browser, name, url) {
   console.log(`\n== Board check: ${name} (${url})`);
   const context = await browser.newContext({ acceptDownloads: true });
+  // Section 8 reads what the Copy buttons put on the clipboard, and puts a sentinel there.
+  await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+    origin: new URL(url).origin,
+  });
   await context.addInitScript(recordWorkerMessages);
   // Lets section 7 hold a render back (see e2e/workerHold.mjs); nothing is held otherwise.
   await context.addInitScript(controlWorkers);
@@ -577,12 +624,13 @@ async function runBoard(browser, name, url) {
         await page.keyboard.type('More soon');
         const commentCount = (await describedText(firstComment))[0];
         await tabOutOfText(page);
+        // Two presses from one box to the next: each box's Copy button comes between them.
         check(
           title,
           headingFocused &&
             tabs.caption > 0 &&
-            tabs.hashtags === 1 &&
-            tabs.firstComment === 1 &&
+            tabs.hashtags === 2 &&
+            tabs.firstComment === 2 &&
             empty === linkedinCount(0) &&
             typed === linkedinCount(11) &&
             tagCount === '1 hashtag' &&
@@ -860,6 +908,395 @@ async function runBoard(browser, name, url) {
                 `${s.name}: first line shown on Tab ${s.onFocus.firstLine}, whole after scrolling the dialog ${s.after.whole} (dialog scrolled ${s.onFocus.dialogScroll} -> ${s.after.dialogScroll} px)`,
             )
             .join('; ')}; page scroll ${pageScroll} -> ${pageScrollAfter}`,
+        );
+      },
+    );
+
+    // 8i–8p. The alt text box and the Copy buttons (SPEC.md, "Caption boxes" and "Copy
+    //    buttons"). Every control is reached with Tab or Shift+Tab, or once with a real mouse
+    //    click, and typed into with page.keyboard. Before each Copy press a sentinel string is put
+    //    on the clipboard, so a Copy that writes nothing cannot pass by finding older text there.
+    const feedOpener = page.getByRole('button', { name: `Open ${FEED_CARD}`, exact: true });
+    const feedDialog = page.getByRole('dialog', { name: 'Instagram Feed vertical' });
+    const feedBox = (name) => feedDialog.getByLabel(name, { exact: true });
+    const feedArticle = page.getByRole('article', { name: FEED_CARD, exact: true });
+    const copyButton = (name) => feedDialog.getByRole('button', { name, exact: true });
+    /** The status message beside a Copy button. */
+    const copyStatus = (name) => copyButton(name).locator('xpath=..').getByRole('status');
+    const putSentinel = () =>
+      page.evaluate((text) => navigator.clipboard.writeText(text), CLIPBOARD_SENTINEL);
+    const readClipboard = () => page.evaluate(() => navigator.clipboard.readText());
+    /**
+     * The status right after a press. "Copied." appears when the browser's clipboard write
+     * resolves, which is a promise and not part of the key press, so this waits for that one
+     * message to appear (at most 1.5 s, inside its 2 s), and never for the 2 s timer.
+     */
+    const copiedStatus = async (name) => {
+      await copyStatus(name)
+        .filter({ hasText: /^Copied\.$/ })
+        .waitFor({ timeout: 1_500 })
+        .catch(() => undefined);
+      return copyStatus(name).innerText();
+    };
+    /**
+     * What the tile shows: its result badge (its first span, a symbol then the word, e.g.
+     * "✓Pass"), reduced to the word, and whether rule 8's reason is on it.
+     */
+    const tileState = async () => ({
+      result: (
+        await feedArticle.evaluate((card) => card.querySelector('span')?.textContent ?? '')
+      ).replace(/^[^A-Za-z]+/, ''),
+      altMissing: (await feedArticle.innerText()).includes('Alt text is missing'),
+    });
+    /** Opens the Feed vertical card's dialog with a click on its Open button, if not open. */
+    const openFeed = async () => {
+      if (!(await feedDialog.isVisible())) {
+        await closeSquare();
+        await feedOpener.click();
+        await feedDialog.waitFor();
+      }
+    };
+    const ALT = 'A crane lifts the final beam at the caf\u{E9} \u{1F3D7}\u{FE0F}';
+    const CAPTION = 'Caf\u{E9} opening day \u{1F477}\nTopping out today';
+    const TAGS_TYPED = 'build caf\u{E9}';
+    const TAGS_COPIED = '#build #caf\u{E9}';
+    const COMMENT = 'More soon \u{1F44B} at the caf\u{E9}';
+    let copiedHashtags = null;
+
+    await step(
+      '8i. the card dialog Tab order is the one in SPEC.md, with the alt text box and the four Copy buttons',
+      async (title) => {
+        await closeSquare();
+        // The export override is shown only on a failing card, so the caption is first taken
+        // past the cap (insertText stands in for a paste, as in 8e) and written by leaving it.
+        await squareOpener.click();
+        await squareDialog.waitFor();
+        await pressUntilFocused(page, caption);
+        await page.keyboard.press('Control+a');
+        await page.keyboard.insertText('y'.repeat(LINKEDIN.captionCap));
+        await page.keyboard.press('Tab');
+        const override = squareDialog.getByRole('checkbox', { name: OVERRIDE_LABEL });
+        await override.waitFor({ timeout: 5_000 });
+        // Opened again, so the walk starts where it does for a person: on the dialog heading.
+        // The click on Open is the same as 8a's; the walk itself is Tab only.
+        await closeSquare();
+        await squareOpener.click();
+        await squareDialog.waitFor();
+        // The crop area appears once the photo has opened; until then Tab would skip it.
+        await squareDialog.getByRole('application').waitFor({ timeout: 30_000 });
+        const order = [];
+        for (let presses = 0; presses < 30; presses++) {
+          await page.keyboard.press('Tab');
+          const reached = await page.evaluate(() => {
+            const element = document.activeElement;
+            if (element.getAttribute('role') === 'application') return 'crop area';
+            if (element.dataset.testid === 'focal-marker') return 'focal point';
+            if (element.tagName === 'TEXTAREA') return element.labels?.[0]?.textContent;
+            if (element.tagName === 'INPUT') {
+              const kinds = {
+                color: 'colour picker',
+                text: 'hex box',
+                radio: 'file type',
+                range: 'quality',
+                checkbox: 'export override',
+              };
+              return kinds[element.type] ?? element.type;
+            }
+            return element.getAttribute('aria-label') ?? element.textContent.trim();
+          });
+          order.push(reached);
+          if (reached === 'Close') break;
+        }
+        // Back to a short caption, so the card no longer fails, and the override goes away.
+        await pressUntilFocused(page, caption, 'Shift+Tab');
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type('Topping out');
+        await page.keyboard.press('Tab');
+        await override.waitFor({ state: 'detached', timeout: 5_000 });
+        await closeSquare();
+        const want = [
+          'crop area',
+          'focal point',
+          'Fit whole photo',
+          'colour picker',
+          'hex box',
+          'file type',
+          'quality',
+          'Caption',
+          'Copy caption',
+          'Hashtags',
+          'Copy hashtags',
+          'First comment',
+          'Copy first comment',
+          'Alt text',
+          'Copy alt text',
+          'export override',
+          'Close',
+        ];
+        check(title, JSON.stringify(order) === JSON.stringify(want), order.join(' → '));
+      },
+    );
+
+    await step(
+      '8j. typing alt text and leaving the box clears the rule 8 warning in the dialog and on the tile',
+      async (title) => {
+        await openFeed();
+        const checks = feedDialog.getByRole('region', { name: 'Checks' });
+        const before = {
+          checks: await checks.innerText(),
+          box: await describedText(feedBox('Alt text')),
+          tile: await tileState(),
+        };
+        await pressUntilFocused(page, feedBox('Alt text'));
+        await page.keyboard.type(ALT);
+        const count = (await describedText(feedBox('Alt text')))[0];
+        // Leaving the box with Tab writes it; focus goes to Copy alt text.
+        await page.keyboard.press('Tab');
+        const onCopy = await copyButton('Copy alt text').evaluate(
+          (element) => element === document.activeElement,
+        );
+        const after = {
+          checks: await checks.innerText(),
+          box: await describedText(feedBox('Alt text')),
+          tile: await tileState(),
+        };
+        // Only rule 8 on this card before, so it must pass once rule 8 is cleared.
+        const onlyRule8 =
+          before.tile.result === 'Warning' &&
+          before.tile.altMissing &&
+          before.box.at(-1) === 'Warning: Alt text is missing.' &&
+          before.checks.includes('Alt text is missing.') &&
+          before.checks.split('Warning:').length === 2;
+        check(
+          title,
+          onlyRule8 &&
+            onCopy &&
+            count === `${[...ALT].length} characters` &&
+            !after.box.some((text) => text.includes('Alt text is missing')) &&
+            !after.checks.includes('Alt text is missing') &&
+            after.tile.result === 'Pass' &&
+            !after.tile.altMissing,
+          `before: tile ${JSON.stringify(before.tile)}, box ${JSON.stringify(before.box)}; after: tile ${JSON.stringify(after.tile)}, box ${JSON.stringify(after.box)}, count "${count}", focus on Copy alt text ${onCopy}`,
+        );
+      },
+    );
+
+    await step(
+      '8k. Ctrl-Z after leaving the alt text box takes the whole visit back in one step, and the warning returns',
+      async (title) => {
+        await openFeed();
+        // Focus is on Copy alt text, a button, so Ctrl-Z is the app's undo.
+        await page.keyboard.press('Control+z');
+        const box = await feedBox('Alt text').inputValue();
+        const described = await describedText(feedBox('Alt text'));
+        const tile = await tileState();
+        check(
+          title,
+          box === '' &&
+            described.at(-1) === 'Warning: Alt text is missing.' &&
+            tile.result === 'Warning' &&
+            tile.altMissing,
+          `alt text "${box}", box ${JSON.stringify(described)}, tile ${JSON.stringify(tile)}`,
+        );
+      },
+    );
+
+    await step(
+      '8l. Copy alt text on an empty box (Space) says "Nothing to copy yet." and leaves the clipboard alone',
+      async (title) => {
+        await openFeed();
+        await pressUntilFocused(page, copyButton('Copy alt text'));
+        await putSentinel();
+        await page.keyboard.press(' ');
+        // Set in the key press itself, with no clipboard call, so it is read straight away.
+        const status = await copyStatus('Copy alt text').innerText();
+        const clipboard = await readClipboard();
+        check(
+          title,
+          status === 'Nothing to copy yet.' && clipboard === CLIPBOARD_SENTINEL,
+          `status "${status}", clipboard ${JSON.stringify(clipboard)}`,
+        );
+      },
+    );
+
+    await step(
+      '8m. Copy hashtags on "# #" (Enter) says "Nothing to copy yet." and leaves the clipboard alone',
+      async (title) => {
+        await openFeed();
+        await pressUntilFocused(page, feedBox('Hashtags'), 'Shift+Tab');
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type('# #');
+        await page.keyboard.press('Tab');
+        await putSentinel();
+        await page.keyboard.press('Enter');
+        const status = await copyStatus('Copy hashtags').innerText();
+        const clipboard = await readClipboard();
+        check(
+          title,
+          status === 'Nothing to copy yet.' && clipboard === CLIPBOARD_SENTINEL,
+          `status "${status}", clipboard ${JSON.stringify(clipboard)}`,
+        );
+      },
+    );
+
+    await step(
+      '8n. each Copy button puts its box text on the clipboard: caption (Enter), hashtags with "#" added (Space), alt text (Enter)',
+      async (title) => {
+        await openFeed();
+        const got = {};
+        // Caption, with an accent, an emoji and a line break; Copy pressed with Enter.
+        await pressUntilFocused(page, feedBox('Caption'), 'Shift+Tab');
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type(CAPTION);
+        await page.keyboard.press('Tab');
+        await putSentinel();
+        await page.keyboard.press('Enter');
+        got.caption = { status: await copiedStatus('Copy caption'), text: await readClipboard() };
+        // Hashtags typed without "#"; Copy pressed with Space.
+        await pressUntilFocused(page, feedBox('Hashtags'));
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type(TAGS_TYPED);
+        await page.keyboard.press('Tab');
+        await putSentinel();
+        await page.keyboard.press(' ');
+        got.hashtags = { status: await copiedStatus('Copy hashtags'), text: await readClipboard() };
+        copiedHashtags = got.hashtags.text;
+        // Alt text again; Copy pressed with Enter.
+        await pressUntilFocused(page, feedBox('Alt text'));
+        await page.keyboard.type(ALT);
+        await page.keyboard.press('Tab');
+        await putSentinel();
+        await page.keyboard.press('Enter');
+        got.altText = { status: await copiedStatus('Copy alt text'), text: await readClipboard() };
+        check(
+          title,
+          got.caption.status === 'Copied.' &&
+            got.caption.text === CAPTION &&
+            got.hashtags.status === 'Copied.' &&
+            got.hashtags.text === TAGS_COPIED &&
+            got.altText.status === 'Copied.' &&
+            got.altText.text === ALT,
+          JSON.stringify(got),
+        );
+      },
+    );
+
+    await step(
+      '8o. Copy first comment by mouse click while still typing copies the typed text, and the box is written once',
+      async (title) => {
+        await openFeed();
+        await pressUntilFocused(page, feedBox('First comment'), 'Shift+Tab');
+        await page.keyboard.press('Control+a');
+        await page.keyboard.type(COMMENT);
+        await putSentinel();
+        // A real click: the press moves focus to the button, which writes the box (one step),
+        // and the click then copies the box's text.
+        await copyButton('Copy first comment').click();
+        const status = await copiedStatus('Copy first comment');
+        const clipboard = await readClipboard();
+        // One Ctrl-Z (focus is on the button) takes back exactly that one write: the first
+        // comment empties and the hashtags written before it stay.
+        await page.keyboard.press('Control+z');
+        const afterUndo = {
+          firstComment: await feedBox('First comment').inputValue(),
+          hashtags: await feedBox('Hashtags').inputValue(),
+        };
+        // Typed again and left with Tab, for the reload and export below.
+        await pressUntilFocused(page, feedBox('First comment'), 'Shift+Tab');
+        await page.keyboard.type(COMMENT);
+        await page.keyboard.press('Tab');
+        check(
+          title,
+          status === 'Copied.' &&
+            clipboard === COMMENT &&
+            afterUndo.firstComment === '' &&
+            afterUndo.hashtags === TAGS_TYPED,
+          `status "${status}", clipboard ${JSON.stringify(clipboard)}; after one Ctrl-Z ${JSON.stringify(afterUndo)}`,
+        );
+      },
+    );
+
+    let feedCardId = null;
+    await step(
+      '8p. after a page reload and loading the .scs again, the card keeps its alt text',
+      async (title) => {
+        if (await feedDialog.isVisible()) {
+          await page.keyboard.press('Escape');
+          await feedDialog.waitFor({ state: 'hidden' });
+        }
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          page.getByRole('button', { name: 'Download .scs' }).click(),
+        ]);
+        const bundlePath = join(outDir, `${name}-alt-text.scs`);
+        await download.saveAs(bundlePath);
+        const saved = JSON.parse(
+          await (
+            await JSZip.loadAsync(readFileSync(bundlePath))
+          )
+            .file('session.json')
+            .async('string'),
+        );
+        const photoId = saved.assets.find((asset) => asset.fileName === PHOTO)?.id;
+        const savedCard = saved.cards.find(
+          (card) => card.placement === 'feed-vertical' && card.assetIds[0] === photoId,
+        );
+        feedCardId = savedCard?.id ?? null;
+        // A real reload empties the page; the session comes back from the bundle (the file
+        // picker cannot be driven, so the file is given to the input, as in section 5).
+        await page.reload({ waitUntil: 'load' });
+        await page.getByText('No session is open.').waitFor();
+        await page.getByLabel('Session bundle file').setInputFiles(bundlePath);
+        await page
+          .getByRole('status')
+          .filter({ hasText: /^Opened / })
+          .first()
+          .waitFor();
+        await openFeed();
+        const kept = {
+          altText: await feedBox('Alt text').inputValue(),
+          caption: await feedBox('Caption').inputValue(),
+          hashtags: await feedBox('Hashtags').inputValue(),
+          firstComment: await feedBox('First comment').inputValue(),
+        };
+        await page.keyboard.press('Escape');
+        await feedDialog.waitFor({ state: 'hidden' });
+        check(
+          title,
+          savedCard?.copy.altText === ALT &&
+            kept.altText === ALT &&
+            kept.caption === CAPTION &&
+            kept.hashtags === TAGS_TYPED &&
+            kept.firstComment === COMMENT,
+          `saved alt text ${JSON.stringify(savedCard?.copy.altText)}; after reload ${JSON.stringify(kept)}`,
+        );
+      },
+    );
+
+    await step(
+      '8q. the exported captions.csv row has the typed alt text, and the hashtags Copy put on the clipboard',
+      async (title) => {
+        await waitForRendered(page, await page.getByRole('article').count());
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          page.getByRole('button', { name: 'Download as .zip' }).click(),
+        ]);
+        const zipPath = join(outDir, `${name}-export.zip`);
+        await download.saveAs(zipPath);
+        const zip = await JSZip.loadAsync(readFileSync(zipPath));
+        const csv = parseCsv(await zip.file('captions.csv').async('string'));
+        const header = csv[0] ?? [];
+        const rows = csv.slice(1).filter((row) => feedCardId && row[0].includes(`_${feedCardId}.`));
+        const row = Object.fromEntries(header.map((column, index) => [column, rows[0]?.[index]]));
+        check(
+          title,
+          rows.length === 1 &&
+            row.alt_text === ALT &&
+            copiedHashtags === TAGS_COPIED &&
+            row.hashtags === copiedHashtags &&
+            row.caption === CAPTION &&
+            row.first_comment === COMMENT,
+          `card ${feedCardId}: ${rows.length} row(s); alt_text ${JSON.stringify(row.alt_text)}, hashtags ${JSON.stringify(row.hashtags)} (Copy gave ${JSON.stringify(copiedHashtags)})`,
         );
       },
     );

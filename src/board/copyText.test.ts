@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parseHashtags } from '../lib/board/copyChecks';
+import { hashtagCell } from '../lib/export/captionsCsv';
 import {
+  ALT_TEXT_HINT,
+  altTextCountText,
   captionCountText,
+  clipboardText,
+  COPY_BUTTON_NAME,
   firstCommentCountText,
   formatCount,
   hashtagCountText,
@@ -82,5 +88,75 @@ describe('STORY_NOTE', () => {
     expect(STORY_NOTE).toBe(
       "Reels show this caption. Stories don't show captions, hashtags or a first comment.",
     );
+  });
+});
+
+describe('the alt text words', () => {
+  it('count characters, the en-US way, with no limit', () => {
+    expect(altTextCountText({ count: 0 })).toBe('0 characters');
+    expect(altTextCountText({ count: 1 })).toBe('1 character');
+    expect(altTextCountText({ count: 1234 })).toBe('1,234 characters');
+  });
+
+  it('have the hint from the spec', () => {
+    expect(ALT_TEXT_HINT).toBe('Describe the picture for people who use screen readers.');
+  });
+});
+
+describe('COPY_BUTTON_NAME', () => {
+  it('names each Copy button after its box', () => {
+    expect(COPY_BUTTON_NAME).toEqual({
+      caption: 'Copy caption',
+      hashtags: 'Copy hashtags',
+      firstComment: 'Copy first comment',
+      altText: 'Copy alt text',
+    });
+  });
+});
+
+describe('clipboardText', () => {
+  it('gives the caption, first comment and alt text exactly as typed', () => {
+    for (const text of [
+      'Hello',
+      ' edge spaces ',
+      'line one\nline two\n\nline four',
+      'Topping out \u{1F477}\u{1F3FD}\u{200D}\u{2640}\u{FE0F}',
+      'caf\u{E9}',
+      'cafe\u{301}',
+      '#notatag in a caption',
+    ]) {
+      for (const field of ['caption', 'firstComment', 'altText'] as const) {
+        expect(clipboardText(field, text)).toBe(text);
+      }
+    }
+    // Precomposed and decomposed accents are not normalised into each other.
+    expect(clipboardText('caption', 'caf\u{E9}')).not.toBe(clipboardText('caption', 'cafe\u{301}'));
+  });
+
+  it('gives nothing for an empty box or one of only spaces and line breaks', () => {
+    for (const text of ['', ' ', '\n', ' \t\r\n ']) {
+      for (const field of ['caption', 'hashtags', 'firstComment', 'altText'] as const) {
+        expect(clipboardText(field, text)).toBe('');
+      }
+    }
+  });
+
+  it('gives the hashtags with "#" added where missing, separated by single spaces', () => {
+    expect(clipboardText('hashtags', 'build, #Site\n  caf\u{E9}\t##two')).toBe(
+      '#build #Site #caf\u{E9} ##two',
+    );
+    expect(clipboardText('hashtags', '\u{1F3D7}\u{FE0F}')).toBe('#\u{1F3D7}\u{FE0F}');
+  });
+
+  it('gives nothing for hashtags of bare "#" marks only', () => {
+    expect(clipboardText('hashtags', '# #')).toBe('');
+    expect(clipboardText('hashtags', ' ##, #\n#')).toBe('');
+    expect(clipboardText('hashtags', '# #a #')).toBe('#a');
+  });
+
+  it("gives the hashtags exactly as the export's captions.csv cell does", () => {
+    for (const text of ['', '# #', 'a b', '#a,#b\nc', ' ##x  y ', 'cafe\u{301} caf\u{E9}']) {
+      expect(clipboardText('hashtags', text)).toBe(hashtagCell(parseHashtags(text)));
+    }
   });
 });

@@ -1543,7 +1543,7 @@ async function runPadding(browser, name, url) {
     // A real click on the heading puts focus where it is when the dialog opens.
     await dialog.getByRole('heading', { level: 2 }).click();
     const order = [];
-    for (let presses = 0; presses < 16; presses++) {
+    for (let presses = 0; presses < 24; presses++) {
       await page.keyboard.press('Tab');
       const reached = await page.evaluate(() => {
         const element = document.activeElement;
@@ -1560,7 +1560,8 @@ async function runPadding(browser, name, url) {
           };
           return kinds[element.type] ?? element.type;
         }
-        return element.textContent.trim();
+        // The Copy buttons all say "Copy"; their accessible names tell them apart.
+        return element.getAttribute('aria-label') ?? element.textContent.trim();
       });
       order.push(reached);
       if (reached === 'Close') break;
@@ -1605,8 +1606,13 @@ async function runPadding(browser, name, url) {
         'file type',
         'quality',
         'Caption',
+        'Copy caption',
         'Hashtags',
+        'Copy hashtags',
         'First comment',
+        'Copy first comment',
+        'Alt text',
+        'Copy alt text',
         'Close',
       ];
       const want = ['crop area', 'focal point', ...rest];

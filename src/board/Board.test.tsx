@@ -133,6 +133,17 @@ function openSession(...assets: (typeof PHOTO)[]) {
 
 const button = (name: string | RegExp) => screen.getByRole('button', { name });
 const status = (name: string) => screen.getByRole('status', { name });
+/** The dialog's status messages other than the Copy buttons' ones under the post text boxes. */
+const otherStatuses = (dialog: HTMLElement) =>
+  within(dialog)
+    .queryAllByRole('status')
+    .filter((element) => !element.closest('[aria-label="Post text"]'));
+/** The one status message in the dialog that is not a Copy button's. */
+function onlyStatus(dialog: HTMLElement): HTMLElement {
+  const found = otherStatuses(dialog);
+  if (found.length !== 1) throw new Error(`expected one status, found ${found.length}`);
+  return found[0] as HTMLElement;
+}
 const cardList = (fileName = 'site.jpg') =>
   screen.getByRole('list', { name: `Cards for ${fileName}` });
 const article = (label: string | RegExp) => screen.getByRole('article', { name: label });
@@ -769,7 +780,7 @@ describe('the details dialog', () => {
 
   it('says the photo is opening, then shows the crop area beside the details', async () => {
     const { dialog } = await openDetails();
-    expect(within(dialog).getByRole('status')).toHaveTextContent(LOADING_TEXT);
+    expect(onlyStatus(dialog)).toHaveTextContent(LOADING_TEXT);
     expect(photoLoads[0]?.input).toMatchObject({
       fileName: 'site.jpg',
       expected: { width: PHOTO.width, height: PHOTO.height },
@@ -930,7 +941,7 @@ describe('the details dialog', () => {
       fireEvent.click(open);
       const dialog = screen.getByRole('dialog') as HTMLDialogElement;
       expect(dialog).toHaveTextContent('No preview yet.');
-      expect(within(dialog).queryByRole('status')).toBeNull();
+      expect(otherStatuses(dialog)).toEqual([]);
       // No file can be made for it, so it has no file type or quality to change.
       expect(within(dialog).queryByRole('group', { name: 'File type' })).toBeNull();
       expect(within(dialog).queryByRole('slider')).toBeNull();
@@ -1350,8 +1361,13 @@ describe('undo in the dialog', () => {
       'PNG',
       'Quality',
       'Caption',
+      'Copy caption',
       'Hashtags',
+      'Copy hashtags',
       'First comment',
+      'Copy first comment',
+      'Alt text',
+      'Copy alt text',
       'Export this card even though it fails its checks',
       'Close',
     ];

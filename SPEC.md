@@ -302,7 +302,7 @@ Card details shows a Background colour control for every card the editor can ope
 - Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
 - Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
 
-The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, caption, hashtags, first comment, export override, Close. Arrow keys on the crop never change any other control.
+The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, caption, Copy caption, hashtags, Copy hashtags, first comment, Copy first comment, alt text, Copy alt text, export override, Close. Arrow keys on the crop never change any other control.
 
 Rendering:
 
@@ -357,6 +357,15 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - Every card shows the caption, hashtags and first comment boxes, including the Instagram "Reel / Story" placement. Reels use captions.
 - On any placement that can be a Story (`canBeStory` is true in `platforms.json`), a short plain note under the boxes says: "Reels show this caption. Stories don't show captions, hashtags or a first comment." The note is neutral text, not a warning. It does not change any validation result.
 - Because Reels post the caption, the Instagram "Reel / Story" placement (key `story`) uses the Instagram feed caption and hashtag limits (`captionCap`, `hashtagCap`, `hashtagsInCaption`), so rules 4 and 5 apply to it.
+- The alt text box comes right after the first comment box, labelled "Alt text", with the hint "Describe the picture for people who use screen readers." It keeps the text exactly as typed and shows a live count, "N characters". No alt-text limit is set, so there is no length warning. While the alt text is empty or only spaces and line breaks, the validator's own rule 8 message shows under the box, so the box always agrees with the card's checks and its board tile. Changing the alt text does not remove `authoredBy` (see "Who wrote each piece of text").
+- The caption, hashtags, first comment and alt text boxes are written to the card the same way. Typing changes only the box. The text is written when the person leaves the box, as one undo step per visit, and not at all if it did not change. A box still being typed in is also written, as that visit's step, when the card dialog closes and when the page is hidden (another tab, or the tab or window closing), so typed text is not lost. Nothing is written if the card is gone.
+
+### Copy buttons
+
+- The caption, hashtags, first comment and alt text boxes each have a Copy button right after them. Its visible text is "Copy"; its accessible name is "Copy caption", "Copy hashtags", "Copy first comment" or "Copy alt text". It is never disabled.
+- It copies what the box holds now, including text not yet written to the card. The caption, first comment and alt text are copied exactly as typed. Hashtags are copied as `captions.csv` writes them, by the export's own function: each tag with "#" added where missing, separated by single spaces.
+- Copying never changes the card and never adds an undo step. Pressing Copy after typing moves focus out of the box, so the box is written as usual when it is left.
+- A status message next to each button says "Copied." for about 2 seconds. If copying fails, it says "Couldn't copy. Select the text and press Ctrl+C." until the next attempt. If the box is empty or holds only spaces and line breaks, or (for hashtags) no tag that `captions.csv` would write, it says "Nothing to copy yet." for about 2 seconds and the clipboard is left as it was.
 
 ### Photos
 
