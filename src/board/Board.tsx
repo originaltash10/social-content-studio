@@ -177,10 +177,14 @@ export function Board({
   const backgroundPreview = trying !== null && trying.cardId === openId ? trying.colour : null;
 
   // Show or close the dialog to match the open card. If the card goes away (undo), close it.
+  // This follows the open card's id, not the card itself: when Esc closes the dialog, a text box
+  // in it writes its text as it loses focus, which changes the card before the dialog's close
+  // event arrives. Following the card would open the dialog again at that moment.
+  const openCardId = openCard?.id ?? null;
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    if (openCard && !element.open) {
+    if (openCardId !== null && !element.open) {
       element.showModal();
       // The board must stay where it is behind the dialog (src/board/scrollLock.ts).
       unlockScroll.current = lockPageScroll();
@@ -193,8 +197,8 @@ export function Board({
       // the dialog down to it before the focus is moved. Start at the top of the dialog too.
       element.scrollTop = 0;
     }
-    if (!openCard && element.open) element.close();
-  }, [openCard, dialogHeadingId]);
+    if (openCardId === null && element.open) element.close();
+  }, [openCardId, dialogHeadingId]);
 
   /** Lets the page scroll again, back where it was when the dialog opened. */
   function releaseScroll() {

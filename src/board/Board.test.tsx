@@ -1742,6 +1742,31 @@ describe('undo of the post text boxes in the dialog', () => {
     expect(steps()).toBe(before + 1);
   });
 
+  it('stays closed when a box writes its text between Esc and the close event, as in Chrome', async () => {
+    const { dialog, opener, box } = await open();
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal');
+    try {
+      act(() => box('Caption').focus());
+      fireEvent.change(box('Caption'), { target: { value: 'Typed, then Esc' } });
+      // Chrome's order: close() ends the open state and moves focus back to the Open button
+      // (so the box writes its text) before the close event is fired.
+      act(() => {
+        dialog.removeAttribute('open');
+        opener.focus();
+      });
+      expect(stored()?.copy.caption).toBe('Typed, then Esc');
+      act(() => {
+        dialog.dispatchEvent(new Event('close'));
+      });
+      expect(showModal).not.toHaveBeenCalled();
+      expect(dialog.open).toBe(false);
+      expect(opener).toHaveFocus();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    } finally {
+      showModal.mockRestore();
+    }
+  });
+
   it('writes a focused box once when the Close button closes the dialog', async () => {
     const { dialog, box } = await open();
     const before = steps();
