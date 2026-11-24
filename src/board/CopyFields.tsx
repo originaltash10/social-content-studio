@@ -1,9 +1,15 @@
 /**
- * The caption, hashtags and first comment boxes in the card dialog (SPEC.md, "Caption boxes").
+ * The caption, hashtags, first comment and alt text boxes in the card dialog (SPEC.md, "Caption
+ * boxes"), each followed by its Copy button (SPEC.md, "Copy buttons"; CopyButton.tsx).
  *
- * Each box shows a live count and, once a limit or a "…more" cut-off is passed, the validator's
- * own message for it, all from src/lib/board/copyChecks.ts, so the boxes say exactly what the
- * card's checks will say once the text is written.
+ * Each box shows a live count and, once a limit or a "…more" cut-off is passed (or, for alt text,
+ * while it is missing), the validator's own message for it, all from
+ * src/lib/board/copyChecks.ts, so the boxes say exactly what the card's checks will say once the
+ * text is written.
+ *
+ * A Copy button copies its box's current draft, so typing not yet written is copied too. Copying
+ * never writes to the store. Pressing it after typing moves focus out of the box first, so the
+ * box is written as usual when it is left.
  *
  * Typing changes only this component's draft. The text is written to the card when the person
  * leaves the box: one store change, so one undo step per visit, and none if the text did not
@@ -21,11 +27,16 @@ import type { CopyField, CopyStatus } from '../lib/board/copyChecks';
 import { RESULT_LABEL } from '../lib/board/view';
 import { useSessionStore } from '../store/sessionStore';
 import type { Card, Issue, PlacementSpec } from '../types';
+import { CopyButton } from './CopyButton';
 import {
+  ALT_TEXT_HINT,
+  COPY_BUTTON_NAME,
   HASHTAG_HINT,
   NO_LIMITS_NOTE,
   STORY_NOTE,
+  altTextCountText,
   captionCountText,
+  clipboardText,
   firstCommentCountText,
   hashtagCountText,
 } from './copyText';
@@ -40,10 +51,11 @@ export type CopyFieldsProps = {
 
 type Drafts = Record<CopyField, string>;
 
-const BOXES: { field: CopyField; label: string; rows: number }[] = [
+const BOXES: { field: CopyField; label: string; rows: number; hint?: string }[] = [
   { field: 'caption', label: 'Caption', rows: 6 },
-  { field: 'hashtags', label: 'Hashtags', rows: 2 },
+  { field: 'hashtags', label: 'Hashtags', rows: 2, hint: HASHTAG_HINT },
   { field: 'firstComment', label: 'First comment', rows: 3 },
+  { field: 'altText', label: 'Alt text', rows: 3, hint: ALT_TEXT_HINT },
 ];
 
 function draftsOf(copy: Card['copy']): Drafts {
@@ -65,6 +77,8 @@ function boxStatus(
     return { count: captionCountText(status.caption), issues: status.caption.issues };
   if (field === 'hashtags')
     return { count: hashtagCountText(status.hashtags), issues: status.hashtags.issues };
+  if (field === 'altText')
+    return { count: altTextCountText(status.altText), issues: status.altText.issues };
   return { count: firstCommentCountText(status.firstComment), issues: [] };
 }
 
@@ -156,7 +170,7 @@ export function CopyFields({ card, spec, record }: CopyFieldsProps) {
     <section aria-label="Post text" className="flex flex-col gap-3">
       <h3 className="font-heading font-semibold">Post text</h3>
       {!spec && <p className="text-ink-secondary">{NO_LIMITS_NOTE}</p>}
-      {BOXES.map(({ field, label, rows }) => {
+      {BOXES.map(({ field, label, rows, hint }) => {
         const id = `${baseId}-${field}`;
         const { count, issues } = boxStatus(field, status);
         const countId = `${id}-count`;
@@ -164,7 +178,7 @@ export function CopyFields({ card, spec, record }: CopyFieldsProps) {
         const messagesId = `${id}-messages`;
         const describedBy = [
           count !== null ? countId : null,
-          field === 'hashtags' ? hintId : null,
+          hint !== undefined ? hintId : null,
           issues.length > 0 ? messagesId : null,
         ].filter((part) => part !== null);
         return (
@@ -186,14 +200,22 @@ export function CopyFields({ card, spec, record }: CopyFieldsProps) {
               onChange={(event) => change(field, event.target.value)}
               onBlur={(event) => leave(field, event.target.value)}
             />
-            {count !== null && (
-              <p id={countId} className="text-label text-ink-secondary">
-                {count}
-              </p>
-            )}
-            {field === 'hashtags' && (
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              {count !== null ? (
+                <p id={countId} className="text-label text-ink-secondary">
+                  {count}
+                </p>
+              ) : (
+                <span />
+              )}
+              <CopyButton
+                name={COPY_BUTTON_NAME[field]}
+                text={clipboardText(field, drafts[field])}
+              />
+            </div>
+            {hint !== undefined && (
               <p id={hintId} className="text-label text-ink-secondary">
-                {HASHTAG_HINT}
+                {hint}
               </p>
             )}
             {issues.length > 0 && (
