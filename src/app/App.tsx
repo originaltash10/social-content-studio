@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Board } from '../board/Board';
 import { ExportPanel } from '../export/ExportPanel';
+import { BriefPanel } from './BriefPanel';
 import { ImportPanel } from './ImportPanel';
 import { SessionPanel } from './SessionPanel';
 
@@ -12,6 +13,7 @@ export function App() {
       <h1 className="font-heading text-2xl font-semibold">Social Content Studio</h1>
       <SessionPanel />
       <ImportPanel />
+      <BriefPanel />
       <Board onBusyChange={setBoardBusy} />
       <ExportPanel busy={boardBusy} />
     </main>

@@ -14,7 +14,7 @@ import {
   makeSession,
 } from '../test/fixtures';
 import { MockDir, domError } from '../test/mockFs';
-import type { Card, ImageEdit, Session } from '../types';
+import type { Brief, Card, ImageEdit, Session } from '../types';
 import {
   AUTOSAVE_MS,
   autosave,
@@ -587,6 +587,114 @@ describe('a background colour and a crop with padding', () => {
     expect(store().undo()).toBe(true);
     expect(await saveSession()).toBe(true);
     expect(await dir.text('session.json')).not.toContain('background');
+  });
+});
+
+describe('the campaign brief', () => {
+  const EDITED: Brief = {
+    topic: '  Topic marker one \n second line ',
+    audience: 'Audience marker two, caf\u{E9} owners \u{1F44B}',
+    cta: ' Call to action marker three.  ',
+    link: 'https://example.com/marker-four',
+    tone: 'casual',
+  };
+  const sessionWrites = (dir: MockDir) => writes(dir).filter((w) => w === 'write session.json');
+
+  it('an edited brief survives a save and reopening the folder', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    expect(open().brief).not.toEqual(EDITED);
+    expect(store().setBrief(EDITED)).toBe(true);
+    expect(store().dirty).toBe(true);
+    expect(await saveSession()).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect((JSON.parse(await dir.text('session.json')) as Session).brief).toEqual(EDITED);
+    await requestClearSession(() => true);
+    expect(store().session).toBeNull();
+    await openFolder(dir);
+    expect(open().brief).toEqual(EDITED);
+    expect(store().dirty).toBe(false);
+    expect(store().undoStack).toEqual([]);
+  });
+
+  it('an edited brief survives a .scs download and loading it again', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    store().setBrief(EDITED);
+    expect(await downloadBundle()).toBe(true);
+    const [bundle] = vi.mocked(downloadBlob).mock.calls[0] ?? [];
+    await requestClearSession(() => true);
+    expect(store().session).toBeNull();
+    expect(await loadBundle(bundle ?? new Blob(), 'brief.scs')).toBe(true);
+    expect(open().brief).toEqual(EDITED);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('a brief whose link was emptied is saved and reopened with no link', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    // The fixture session's brief has a link.
+    expect(open().brief.link).toBe('https://example.com/project');
+    store().setBrief({ ...open().brief, link: '   ' });
+    expect(await saveSession()).toBe(true);
+    const saved = (JSON.parse(await dir.text('session.json')) as Session).brief;
+    expect(Object.hasOwn(saved, 'link')).toBe(false);
+    await requestClearSession(() => true);
+    await openFolder(dir);
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(open().brief.topic).toBe(makeSession().brief.topic);
+  });
+
+  it('a brief edit triggers one autosave, and setting the same brief triggers none', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    const stop = startAutosave();
+    // The brief the session already has: not a change, so nothing is written.
+    expect(store().setBrief({ ...open().brief })).toBe(true);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2);
+    expect(dir.log).toEqual([]);
+    expect(store().dirty).toBe(false);
+    // An edit: written once, at the next autosave, and not again after it.
+    store().setBrief(EDITED);
+    expect(store().dirty).toBe(true);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 3);
+    expect(sessionWrites(dir)).toHaveLength(1);
+    expect(store().dirty).toBe(false);
+    expect((JSON.parse(await dir.text('session.json')) as Session).brief).toEqual(EDITED);
+    // The same brief again: still that one write.
+    expect(store().setBrief({ ...EDITED })).toBe(true);
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 3);
+    stop();
+    expect(sessionWrites(dir)).toHaveLength(1);
+    expect(store().dirty).toBe(false);
+  });
+
+  it('a brief edit alone does not autosave a session with no folder, and never downloads', async () => {
+    newSession('No folder yet');
+    store().setBrief(EDITED);
+    const stop = startAutosave();
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2);
+    stop();
+    expect(downloadBlob).not.toHaveBeenCalled();
+    expect(store().dirty).toBe(true);
+    expect(open().brief).toEqual(EDITED);
+  });
+
+  it('a new session starts with an empty brief, and the earlier folder keeps its own', async () => {
+    const dir = await folderWithSession();
+    await openFolder(dir);
+    store().setBrief(EDITED);
+    expect(await saveSession()).toBe(true);
+    dir.log.length = 0;
+    newSession('Next');
+    expect(open().brief).toEqual({ topic: '', audience: '', cta: '', tone: 'neutral' });
+    // A brief set in the new session is never written to the earlier session's folder.
+    store().setBrief({ ...EDITED, topic: 'Topic of the new session' });
+    const stop = startAutosave();
+    await vi.advanceTimersByTimeAsync(AUTOSAVE_MS * 2);
+    stop();
+    expect(dir.log).toEqual([]);
+    expect((JSON.parse(await dir.text('session.json')) as Session).brief).toEqual(EDITED);
   });
 });
 

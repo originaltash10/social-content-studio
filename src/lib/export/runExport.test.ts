@@ -597,3 +597,62 @@ describe('a session that closes or changes', () => {
     expect(run.client.render).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the campaign brief', () => {
+  /** Text that appears nowhere else in these tests, one piece per brief field. */
+  const BRIEF = {
+    topic: 'ZZ-TOPIC-4417',
+    audience: 'ZZ-AUDIENCE-5528',
+    cta: 'ZZ-CTA-6639',
+    link: 'https://zz-link-7741.example/path',
+    tone: 'casual' as const,
+  };
+  const MARKERS = [...Object.values(BRIEF), 'zz-link-7741', 'ZZ-'];
+  const hasMarker = (text: string) =>
+    MARKERS.some((marker) => text.toLowerCase().includes(marker.toLowerCase()));
+
+  it('is in no captions.csv cell, no exported file and no file name, and is not sent to be rendered', async () => {
+    // The whole open session is handed over, brief included, as a caller might by mistake.
+    const open = { ...session([FEED, SQUARE]), brief: BRIEF };
+    state = open;
+    expect(MARKERS.every((marker) => hasMarker(marker))).toBe(true);
+    expect(hasMarker(JSON.stringify(state))).toBe(true);
+    // Nothing else in the set-up holds a marker, so a match below can only be the brief.
+    expect(hasMarker(JSON.stringify(session([FEED, SQUARE])))).toBe(false);
+
+    const client = autoClient();
+    const run = deps({ client });
+    const report = await runExport(run);
+
+    expect(report.outcome).toBe('complete');
+    expect(run.sink.files.size).toBe(2);
+    expect(run.sink.csv).not.toBeNull();
+    expect(hasMarker(run.sink.csv as string)).toBe(false);
+    for (const [path, bytes] of run.sink.files) {
+      expect(hasMarker(path)).toBe(false);
+      expect(hasMarker(new TextDecoder('latin1').decode(bytes))).toBe(false);
+      expect(hasMarker(new TextDecoder('utf-8').decode(bytes))).toBe(false);
+      expect(hasMarker(new TextDecoder('utf-16le').decode(bytes))).toBe(false);
+    }
+    expect(client.render).toHaveBeenCalledTimes(2);
+    for (const [job] of client.render.mock.calls)
+      expect(hasMarker(JSON.stringify(job))).toBe(false);
+    expect(hasMarker(JSON.stringify(report))).toBe(false);
+  });
+
+  it('changing while files are being made does not mark a card as changed', async () => {
+    const open = { ...session([FEED, SQUARE]), brief: BRIEF };
+    state = open;
+    const changed = { ...open, brief: { ...BRIEF, topic: 'ZZ-TOPIC-CHANGED', tone: 'formal' } };
+    const sink = fakeSink();
+    sink.write.mockImplementation(async (path, bytes) => {
+      sink.files.set(path, bytes);
+      state = changed;
+    });
+    const report = await runExport(deps({ sink }));
+    expect(report.outcome).toBe('complete');
+    expect(report.skipped).toEqual([]);
+    expect(report.exported.map((f) => f.cardId)).toEqual(['feed', 'square']);
+    expect(hasMarker(sink.csv as string)).toBe(false);
+  });
+});

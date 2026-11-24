@@ -23,6 +23,13 @@
  * pressed with Enter, Space or a mouse click; "Nothing to copy yet."; the alt text kept through a
  * page reload and .scs load; and the exported captions.csv alt_text and hashtags.
  *
+ * Section 10 (`runBrief`), in a session of its own, checks the campaign brief panel: the page's
+ * Tab order through it, forwards and back; text typed with the keyboard and saved exactly as
+ * typed; the tone chosen with the arrow keys; "Unsaved changes"; the browser's typing undo inside
+ * a box and the app's undo outside one; an emptied Link box; no link warning from a link in the
+ * brief; the brief kept through a .scs, a page reload and Reopen last; and New session while
+ * typing, accepted and dismissed.
+ *
  * Like e2e/image-worker.check.mjs, it needs Playwright with Chromium already installed on the
  * machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is written
  * inside the repository except the normal `dist` build.
@@ -1334,6 +1341,577 @@ async function runBoard(browser, name, url) {
   return checks.every((c) => c.ok);
 }
 
+// --------------------------------------------------------------------------- the campaign brief
+
+const BRIEF_FOLDER = 'board-check-brief-session';
+const BRIEF_PHOTO = 'brief-check.jpg';
+const BRIEF_CARD = `Instagram Feed vertical for ${BRIEF_PHOTO}, v1`;
+/** The question the session panel asks before unsaved changes are lost (src/app/SessionPanel.tsx). */
+const DISCARD_PROMPT = 'The open session has unsaved changes. Discard them and continue?';
+/** Part of the validator's rule 9 message. */
+const LINK_WARNING = 'links are not clickable';
+
+/**
+ * Runs in the page before the app. The folder picker returns a browser-private (OPFS) folder,
+ * which supports the same reads and writes as a folder on disk, so Save and Reopen last can be
+ * checked without a real picker (the same stand-in as e2e/export.check.mjs).
+ */
+function folderStandIn(folderName) {
+  window.showDirectoryPicker = async () => {
+    const opfs = await navigator.storage.getDirectory();
+    return opfs.getDirectoryHandle(folderName, { create: true });
+  };
+  const proto = FileSystemHandle.prototype;
+  if (!('queryPermission' in proto)) proto.queryPermission = async () => 'granted';
+  if (!('requestPermission' in proto)) proto.requestPermission = async () => 'granted';
+}
+
+/**
+ * Section 10: the campaign brief panel (SPEC.md, "Campaign brief panel"), in a session of its
+ * own with one Instagram card. Every control is reached with Tab or a real click and typed into
+ * with page.keyboard. What was stored is read from the saved session.json (in the stand-in
+ * folder) or from a downloaded .scs, never only from the screen.
+ *
+ * Exceptions to "reach it like a person", all for the system's file and folder pickers, which
+ * cannot be driven: the photo and the .scs are given to their file inputs directly, and the
+ * folder picker is replaced by `folderStandIn`.
+ */
+async function runBrief(browser, name, url) {
+  console.log(`\n== Board check, campaign brief: ${name} (${url})`);
+  const context = await browser.newContext({ acceptDownloads: true });
+  // A step whose control is missing fails after this long, and the next step runs.
+  context.setDefaultTimeout(10_000);
+  await context.addInitScript(folderStandIn, BRIEF_FOLDER);
+  const requests = [];
+  const problems = [];
+  context.on('request', (request) => requests.push(request.url()));
+  context.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+  });
+  context.on('requestfailed', (request) => problems.push(`request failed: ${request.url()}`));
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  /** Every question the page asked, and how the next one is answered. */
+  const dialogs = [];
+  let answer = 'accept';
+  page.on('dialog', (dialog) => {
+    dialogs.push(dialog.message());
+    return answer === 'accept' ? dialog.accept() : dialog.dismiss();
+  });
+
+  const checks = [];
+  const check = (title, ok, detail = '') => {
+    checks.push({ title, ok, detail });
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${title}${detail ? `: ${detail}` : ''}`);
+  };
+  /** Runs one step. If it cannot be carried out, that is its failure, and the next step runs. */
+  const step = async (title, run) => {
+    try {
+      await run(title);
+    } catch (error) {
+      const lines = String(error).split('\n');
+      const call = lines.find((line) => line.includes('- waiting for '));
+      const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+      check(title, false, waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''));
+    }
+  };
+
+  const panel = page.getByRole('region', { name: 'Campaign brief', exact: true });
+  const box = (label) => panel.getByRole('textbox', { name: label, exact: true });
+  const tone = (label) => panel.getByRole('radio', { name: label, exact: true });
+  const BOXES = ['Topic', 'Audience', 'Call to action', 'Link'];
+  const chooseFiles = page.getByRole('button', { name: 'Choose files' });
+  const newSession = page.getByRole('button', { name: 'New session' });
+  const changesCell = page
+    .locator('dt', { hasText: /^Changes$/ })
+    .locator('xpath=following-sibling::dd[1]');
+  const isFocused = (locator) => locator.evaluate((element) => element === document.activeElement);
+  /** What the panel shows now: the four boxes and the chosen tone. */
+  const shown = async () => {
+    const state = {};
+    for (const label of BOXES) state[label] = await box(label).inputValue();
+    state.tone = await panel.getByRole('radio', { checked: true }).getAttribute('value');
+    return state;
+  };
+  /** Which control has focus: its section, then its label or text. */
+  const focusName = () =>
+    page.evaluate(() => {
+      const element = document.activeElement;
+      if (!element || element === document.body) return '(nothing)';
+      const section = element.closest('section');
+      const labelledBy = section?.getAttribute('aria-labelledby');
+      const sectionName =
+        section?.getAttribute('aria-label') ??
+        (labelledBy ? document.getElementById(labelledBy)?.textContent : null) ??
+        '(no section)';
+      const label =
+        element.labels?.[0]?.textContent?.trim() ||
+        element.getAttribute('aria-label') ||
+        element.textContent?.trim() ||
+        element.tagName;
+      return `${sectionName}: ${label}`;
+    });
+  const inBoard = () =>
+    page.evaluate(() => document.activeElement?.closest('section[aria-label="Board"]') !== null);
+  /** Presses Save (a real click) and waits until the session panel says it is saved. */
+  const save = async () => {
+    await page.getByRole('button', { name: 'Save', exact: true }).click();
+    await changesCell.filter({ hasText: 'All changes saved' }).waitFor();
+  };
+  /** session.json as it is in the stand-in folder now. */
+  const savedSession = () =>
+    page.evaluate(async (folderName) => {
+      const opfs = await navigator.storage.getDirectory();
+      const folder = await opfs.getDirectoryHandle(folderName);
+      const file = await (await folder.getFileHandle('session.json')).getFile();
+      return JSON.parse(await file.text());
+    }, BRIEF_FOLDER);
+  const cardDialog = page.getByRole('dialog', { name: 'Instagram Feed vertical' });
+  const captionBox = cardDialog.getByLabel('Caption', { exact: true });
+  const openCard = async () => {
+    await page.getByRole('button', { name: `Open ${BRIEF_CARD}`, exact: true }).click();
+    await cardDialog.waitFor();
+  };
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+
+  const TOPIC = 'Line one\nline two';
+  const AUDIENCE = 'Caf\u{E9} owners and site crews';
+  const CTA = '  Call now, today.  ';
+  const LINK = 'https://example.com/brief?x=1';
+  const FORWARD = [
+    'Campaign brief: Topic',
+    'Campaign brief: Audience',
+    'Campaign brief: Call to action',
+    'Campaign brief: Link',
+    'Campaign brief: Neutral',
+  ];
+  /** The brief as the later steps expect it; each step that changes it says so here. */
+  const expected = { topic: TOPIC, audience: AUDIENCE, cta: CTA, link: LINK, tone: 'neutral' };
+  const shownFor = (brief) => ({
+    Topic: brief.topic,
+    Audience: brief.audience,
+    'Call to action': brief.cta,
+    Link: brief.link ?? '',
+    tone: brief.tone,
+  });
+
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    await newSession.click();
+    // The system's file picker cannot be driven, so the file is given to the input directly.
+    await page.getByLabel('Photos to import').setInputFiles({
+      name: BRIEF_PHOTO,
+      mimeType: 'image/jpeg',
+      buffer: await makePhoto(page),
+    });
+    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+    await createCards(page, 'Feed vertical');
+    await waitForRendered(page, 1);
+    // Saved to the stand-in folder first, so "Unsaved changes" below can only be the brief's.
+    await save();
+
+    await step(
+      '10a. Tab from Choose files goes to Topic, Audience, Call to action, Link and the chosen tone, then on to the Board',
+      async (title) => {
+        const presses = await pressUntilFocused(page, chooseFiles, 'Tab', 60);
+        const seen = [];
+        for (let i = 0; i < FORWARD.length; i++) {
+          await page.keyboard.press('Tab');
+          seen.push(await focusName());
+        }
+        const onChecked = await isFocused(tone('Neutral'));
+        await page.keyboard.press('Tab');
+        const after = { name: await focusName(), inBoard: await inBoard() };
+        check(
+          title,
+          same(seen, FORWARD) && onChecked && after.inBoard,
+          `${presses} Tab presses to Choose files; then ${seen.join(' > ')}; the next Tab: ${after.name}`,
+        );
+      },
+    );
+
+    await step(
+      '10b. Shift+Tab from the Board walks back the same way, to Choose files',
+      async (title) => {
+        // Focus is on the Board's first control, where 10a left it.
+        const startedInBoard = await inBoard();
+        const seen = [];
+        for (let i = 0; i < FORWARD.length; i++) {
+          await page.keyboard.press('Shift+Tab');
+          seen.push(await focusName());
+        }
+        await page.keyboard.press('Shift+Tab');
+        const back = await isFocused(chooseFiles);
+        check(
+          title,
+          startedInBoard && same(seen, [...FORWARD].reverse()) && back,
+          `${seen.join(' > ')}; then ${await focusName()}`,
+        );
+      },
+    );
+
+    let afterFirstBox = null;
+    await step(
+      '10c. text typed into each box and left with Tab is saved exactly as typed, line break and spaces included',
+      async (title) => {
+        // From Choose files, where 10b ended, one Tab reaches Topic.
+        await pressUntilFocused(page, box('Topic'), 'Tab', 60);
+        await page.keyboard.type('Line one');
+        await page.keyboard.press('Enter');
+        await page.keyboard.type('line two');
+        await page.keyboard.press('Tab');
+        afterFirstBox = await changesCell.innerText();
+        await page.keyboard.type(AUDIENCE);
+        await page.keyboard.press('Tab');
+        await page.keyboard.type(CTA);
+        await page.keyboard.press('Tab');
+        await page.keyboard.type(LINK);
+        await page.keyboard.press('Tab');
+        const onTone = await isFocused(tone('Neutral'));
+        const screen = await shown();
+        await save();
+        const stored = (await savedSession()).brief;
+        check(
+          title,
+          onTone && same(screen, shownFor(expected)) && same(stored, expected),
+          `session.json brief ${JSON.stringify(stored)}`,
+        );
+      },
+    );
+
+    await step('10d. "Unsaved changes" appears as soon as the first brief box is left', (title) => {
+      check(
+        title,
+        afterFirstBox === 'Unsaved changes',
+        `the session panel said "${afterFirstBox}"`,
+      );
+    });
+
+    await step(
+      '10e. the arrow keys choose the tone, and it is written at once, before the radio button is left',
+      async (title) => {
+        await pressUntilFocused(page, tone('Neutral'), 'Tab', 60);
+        const before = await changesCell.innerText();
+        await page.keyboard.press('ArrowRight');
+        const casual = {
+          checked: await tone('Casual').isChecked(),
+          focused: await isFocused(tone('Casual')),
+          changes: await changesCell.innerText(),
+        };
+        await page.keyboard.press('ArrowLeft');
+        await page.keyboard.press('ArrowLeft');
+        const formal = await tone('Formal').isChecked();
+        await save();
+        expected.tone = 'formal';
+        const stored = (await savedSession()).brief;
+        check(
+          title,
+          before === 'All changes saved' &&
+            casual.checked &&
+            casual.focused &&
+            casual.changes === 'Unsaved changes' &&
+            formal &&
+            same(stored, expected),
+          `before "${before}"; after ArrowRight ${JSON.stringify(casual)}; saved tone "${stored.tone}"`,
+        );
+      },
+    );
+
+    await step(
+      "10f. Ctrl+Z inside a brief box is the browser's typing undo, and leaving the box writes only what it shows",
+      async (title) => {
+        await pressUntilFocused(page, box('Call to action'), 'Tab', 60);
+        // Tab selects the box's text; End puts the caret after it instead.
+        await page.keyboard.press('End');
+        await page.keyboard.type(' EXTRA');
+        const typed = await box('Call to action').inputValue();
+        await page.keyboard.press('Control+z');
+        const undone = await box('Call to action').inputValue();
+        const stillInBox = await isFocused(box('Call to action'));
+        await page.keyboard.press('Tab');
+        await save();
+        const stored = (await savedSession()).brief;
+        expected.cta = undone;
+        check(
+          title,
+          typed === `${CTA} EXTRA` &&
+            undone !== typed &&
+            typed.startsWith(undone) &&
+            undone.startsWith(CTA) &&
+            stillInBox &&
+            stored.cta === undone &&
+            same(stored, expected),
+          `typed ${JSON.stringify(typed)}; after Ctrl+Z ${JSON.stringify(undone)}; saved ${JSON.stringify(stored.cta)}`,
+        );
+      },
+    );
+
+    await step(
+      '10g. Ctrl+Z on a tone radio button undoes the last card change and leaves the brief alone',
+      async (title) => {
+        // A card change: a caption typed in the card dialog and left with Tab.
+        await openCard();
+        await pressUntilFocused(page, captionBox);
+        await page.keyboard.type('Caption for the undo check');
+        await page.keyboard.press('Tab');
+        await page.keyboard.press('Escape');
+        await cardDialog.waitFor({ state: 'hidden' });
+        await save();
+        const captionBefore = (await savedSession()).cards[0].copy.caption;
+        // Then a brief change, after the card change.
+        await box('Audience').click();
+        await page.keyboard.press('Control+End');
+        await page.keyboard.type(' and more');
+        await pressUntilFocused(page, tone('Formal'), 'Tab', 5);
+        await page.keyboard.press('Control+z');
+        const stillOnTone = await isFocused(tone('Formal'));
+        const screen = await shown();
+        await save();
+        const saved = await savedSession();
+        expected.audience = `${AUDIENCE} and more`;
+        check(
+          title,
+          captionBefore === 'Caption for the undo check' &&
+            saved.cards[0].copy.caption === '' &&
+            stillOnTone &&
+            same(screen, shownFor(expected)) &&
+            same(saved.brief, expected),
+          `caption before ${JSON.stringify(captionBefore)}, after ${JSON.stringify(saved.cards[0].copy.caption)}; brief ${JSON.stringify(saved.brief)}`,
+        );
+      },
+    );
+
+    await step('10h. an emptied Link box is saved with no link', async (title) => {
+      await box('Link').click();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.press('Backspace');
+      await page.keyboard.press('Tab');
+      const changes = await changesCell.innerText();
+      await save();
+      const stored = (await savedSession()).brief;
+      check(
+        title,
+        changes === 'Unsaved changes' &&
+          !Object.hasOwn(stored, 'link') &&
+          same(stored, { ...expected, link: undefined }),
+        `session.json brief ${JSON.stringify(stored)}`,
+      );
+    });
+
+    await step(
+      '10i. a Link box left holding only spaces is no link either: the box empties and nothing changes',
+      async (title) => {
+        await pressUntilFocused(page, box('Link'), 'Tab', 60);
+        await page.keyboard.type('   ');
+        const typed = await box('Link').inputValue();
+        await page.keyboard.press('Tab');
+        const after = {
+          box: await box('Link').inputValue(),
+          changes: await changesCell.innerText(),
+        };
+        const stored = (await savedSession()).brief;
+        // The link is typed again for the steps below.
+        await pressUntilFocused(page, box('Link'), 'Shift+Tab', 5);
+        await page.keyboard.type(LINK);
+        await page.keyboard.press('Tab');
+        await save();
+        const restored = (await savedSession()).brief;
+        check(
+          title,
+          typed === '   ' &&
+            after.box === '' &&
+            after.changes === 'All changes saved' &&
+            !Object.hasOwn(stored, 'link') &&
+            same(restored, expected),
+          `typed ${JSON.stringify(typed)}; then ${JSON.stringify(after)}; link typed again: ${JSON.stringify(restored.link)}`,
+        );
+      },
+    );
+
+    await step(
+      '10j. with a link in the brief and none in the caption, the Instagram card shows no link warning on its tile or in its dialog',
+      async (title) => {
+        const article = page.getByRole('article', { name: BRIEF_CARD, exact: true });
+        await waitForRendered(page, 1);
+        const briefLink = await box('Link').inputValue();
+        const tile = (await article.innerText()).includes(LINK_WARNING);
+        await openCard();
+        const dialogBefore = (await cardDialog.innerText()).includes(LINK_WARNING);
+        // The same link typed into the caption does give the warning, so the check can tell.
+        await pressUntilFocused(page, captionBox);
+        await page.keyboard.type(LINK);
+        await page.keyboard.press('Tab');
+        const dialogWithLink = (await cardDialog.innerText()).includes(LINK_WARNING);
+        // Taken back with the dialog's own undo, from a control that holds no text.
+        await pressUntilFocused(page, captionBox, 'Shift+Tab', 5);
+        await tabOutOfText(page);
+        await page.keyboard.press('Control+z');
+        const captionAfter = await captionBox.inputValue();
+        await page.keyboard.press('Escape');
+        await cardDialog.waitFor({ state: 'hidden' });
+        check(
+          title,
+          briefLink === LINK && !tile && !dialogBefore && dialogWithLink && captionAfter === '',
+          `brief link ${JSON.stringify(briefLink)}; warning on the tile: ${tile}, in the dialog: ${dialogBefore}; with the link in the caption: ${dialogWithLink}`,
+        );
+      },
+    );
+
+    const bundlePath = join(outDir, `${name}-brief.scs`);
+    await step(
+      '10k. the brief is in a downloaded .scs, and is shown again after a page reload and loading that .scs',
+      async (title) => {
+        await save();
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          page.getByRole('button', { name: 'Download .scs' }).click(),
+        ]);
+        await download.saveAs(bundlePath);
+        const bundled = JSON.parse(
+          await (
+            await JSZip.loadAsync(readFileSync(bundlePath))
+          )
+            .file('session.json')
+            .async('string'),
+        ).brief;
+        await page.reload({ waitUntil: 'load' });
+        await page.getByText('No session is open.').waitFor();
+        const hiddenWithNoSession = (await panel.count()) === 0;
+        // The system's file picker cannot be driven, so the file is given to the input directly.
+        await page.getByLabel('Session bundle file').setInputFiles(bundlePath);
+        await page
+          .getByRole('status')
+          .filter({ hasText: /^Opened .* from bundle / })
+          .first()
+          .waitFor();
+        const screen = await shown();
+        check(
+          title,
+          same(bundled, expected) && hiddenWithNoSession && same(screen, shownFor(expected)),
+          `.scs brief ${JSON.stringify(bundled)}; after loading it ${JSON.stringify(screen)}`,
+        );
+      },
+    );
+
+    await step('10l. the brief survives a page reload and Reopen last', async (title) => {
+      await page.reload({ waitUntil: 'load' });
+      await page.getByText('No session is open.').waitFor();
+      await page.getByRole('button', { name: 'Reopen last' }).click();
+      await page
+        .getByRole('status')
+        .filter({ hasText: /^Opened .* from folder / })
+        .first()
+        .waitFor();
+      const screen = await shown();
+      const changes = await changesCell.innerText();
+      check(
+        title,
+        same(screen, shownFor(expected)) && changes === 'All changes saved',
+        `after Reopen last ${JSON.stringify(screen)}; "${changes}"`,
+      );
+    });
+
+    await step(
+      '10m. typing in Topic and then pressing New session asks about unsaved changes; accepted, the new session has an empty brief and Neutral',
+      async (title) => {
+        // The reopened session is saved, so the question can only come from the typed text,
+        // which is written when the click takes focus out of the box.
+        const before = await changesCell.innerText();
+        await box('Topic').click();
+        await page.keyboard.press('Control+End');
+        await page.keyboard.type(' PENDING');
+        const typed = await box('Topic').inputValue();
+        dialogs.length = 0;
+        answer = 'accept';
+        await newSession.click();
+        await page
+          .getByRole('status')
+          .filter({ hasText: /^Started / })
+          .first()
+          .waitFor();
+        const screen = await shown();
+        // The folder of the earlier session was not written with the typed text.
+        const folderTopic = (await savedSession()).brief.topic;
+        check(
+          title,
+          before === 'All changes saved' &&
+            typed === `${TOPIC} PENDING` &&
+            same(dialogs, [DISCARD_PROMPT]) &&
+            same(screen, {
+              Topic: '',
+              Audience: '',
+              'Call to action': '',
+              Link: '',
+              tone: 'neutral',
+            }) &&
+            folderTopic === TOPIC,
+          `asked ${JSON.stringify(dialogs)}; the new session shows ${JSON.stringify(screen)}; the earlier folder's topic ${JSON.stringify(folderTopic)}`,
+        );
+      },
+    );
+
+    await step(
+      '10n. the same with the question dismissed: the session stays, with the typed text in it',
+      async (title) => {
+        await box('Topic').click();
+        await page.keyboard.type('Kept in this session');
+        dialogs.length = 0;
+        answer = 'dismiss';
+        await newSession.click();
+        const screen = await shown();
+        answer = 'accept';
+        const [download] = await Promise.all([
+          page.waitForEvent('download'),
+          page.getByRole('button', { name: 'Download .scs' }).click(),
+        ]);
+        const keptPath = join(outDir, `${name}-brief-kept.scs`);
+        await download.saveAs(keptPath);
+        const kept = JSON.parse(
+          await (
+            await JSZip.loadAsync(readFileSync(keptPath))
+          )
+            .file('session.json')
+            .async('string'),
+        ).brief;
+        check(
+          title,
+          same(dialogs, [DISCARD_PROMPT]) &&
+            screen.Topic === 'Kept in this session' &&
+            same(kept, { topic: 'Kept in this session', audience: '', cta: '', tone: 'neutral' }),
+          `asked ${JSON.stringify(dialogs)}; the box shows ${JSON.stringify(screen.Topic)}; .scs brief ${JSON.stringify(kept)}`,
+        );
+      },
+    );
+
+    const outside = requests.filter((r) => !r.startsWith(url) && !/^(blob|data):/.test(r));
+    check(
+      `every request stays under ${url}`,
+      outside.length === 0,
+      `${requests.length} requests${outside.length ? `; outside: ${outside.join(', ')}` : ''}`,
+    );
+    check('no failed requests and no console errors', problems.length === 0, problems.join(' | '));
+    writeFileSync(
+      join(outDir, `${name}-brief-report.json`),
+      JSON.stringify({ checks, requests, problems }, null, 2),
+    );
+  } catch (error) {
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
+  } finally {
+    await context.close();
+  }
+  return checks.every((c) => c.ok);
+}
+
 let failed = false;
 const browser = await chromium.launch();
 try {
@@ -1342,6 +1920,7 @@ try {
   const devUrl = `http://localhost:${PORTS.dev}/`;
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, devUrl);
   failed = !(await runBoard(browser, 'dev', devUrl)) || failed;
+  failed = !(await runBrief(browser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -1356,6 +1935,7 @@ try {
     siteUrl,
   );
   failed = !(await runBoard(browser, 'production', siteUrl)) || failed;
+  failed = !(await runBrief(browser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);

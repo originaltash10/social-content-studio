@@ -20,6 +20,10 @@ the images as files. The app as a whole is not finished. What works today:
   saved with the session, unchanged. A photo that is already in the session is not added twice.
   Files are recognised by their contents, not their names. Video (MP4, MOV) is not imported yet,
   and other file types need converting to JPG or PNG first; the panel says so for each file.
+- **Campaign brief.** With a session open, fill in the Campaign brief panel under the import
+  panel: topic, audience, call to action, link and tone. All of it is optional. It is saved with
+  the session and is never exported; nothing uses it yet, but the planned AI writing features
+  will.
 - **The board.** Choose Create cards, pick photos and Instagram or LinkedIn placements (for
   example Instagram Feed vertical or LinkedIn Image post square), and the board makes one card
   for each. Each card's image is cropped around a point on the photo that you can move, and
@@ -65,9 +69,10 @@ the images as files. The app as a whole is not finished. What works today:
 - **Platform rules.** The sizes, caption limits and other rules for each placement are kept in
   one data file (`src/data/platforms.json`), which the board and its checks read.
 
-For now every card shows a Warning, because alt text (a description of the image for people
-using screen readers) cannot be written yet. Still to come: captions and alt text, text and
-logos on the image, carousels, and video.
+Open a card to write its caption, hashtags, first comment and alt text (a description of the
+image for people using screen readers); each box has a Copy button. A card shows a Warning for
+alt text only until its alt text is written. Still to come: AI help with writing captions and
+alt text, text and logos on the image, carousels, and video.
 [SPEC.md](SPEC.md) describes the full plan.
 
 ## Privacy

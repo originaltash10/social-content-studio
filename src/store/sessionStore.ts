@@ -13,6 +13,11 @@
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
  * - A card's validation result is the validator's output, not an edit, so recording it is not
  *   an undo step, and recording the same result again is not a change.
+ * - "The campaign brief and the brand kit are not cards and are not part of undo." Changing the
+ *   brief (`setBrief`) is a change to save, never an undo step.
+ * - Text typed for one session is never written to another (SPEC.md, "Campaign brief panel").
+ *   `opening` counts each time a session is put in the store afresh or taken away, so a panel
+ *   can tell whether the session it holds typing for is still the open one.
  *
  * API keys are not part of this store. They live in IndexedDB only (Settings, Phase 2).
  */
@@ -53,6 +58,14 @@ type SessionData = {
   dirty: boolean;
   /** Goes up by one on every change; lets a save tell whether anything changed while it ran. */
   revision: number;
+  /**
+   * Goes up by one each time a session is put in the store afresh or taken away: by
+   * `createSession`, `loadSession` and `clearSession`, and by nothing else. An edit leaves it
+   * alone. The session's id cannot do this job: clearing a session and opening it again, or
+   * loading the same session over the open one, gives the same id. Memory only: it is not part
+   * of the session, never written to a file, and not part of undo.
+   */
+  opening: number;
   lastSavedAt: string | null;
   /** Assets whose file could not be found on load. Memory only; never written to a file. */
   missingAssetIds: string[];
@@ -75,6 +88,14 @@ type SessionActions = {
    * changed. Returns false if there is no such card.
    */
   setValidation: (id: string, result: ValidationResult) => boolean;
+  /**
+   * Replaces the campaign brief with a copy of `brief`. It is not an undo step, and undo never
+   * changes the brief. Text is kept exactly as given, except that a link that is empty or only
+   * whitespace is left out. A brief equal to the open one in all five fields, where no link and
+   * an empty link are the same, changes nothing, so it does not mark the session as changed.
+   * Returns false if no session is open.
+   */
+  setBrief: (brief: Brief) => boolean;
   /**
    * Moves a photo's focal point and gives the listed cards their new crops, as one change and
    * one undo step. The point is kept inside 0..1. A crop is applied only to a single-photo
@@ -126,11 +147,29 @@ export function emptyBrief(): Brief {
   return { topic: '', audience: '', cta: '', tone: 'neutral' };
 }
 
+/**
+ * A copy of a brief holding its five fields and nothing else. A link that is empty or only
+ * whitespace is left out; all other text is kept exactly as it is.
+ */
+function briefCopy(brief: Brief): Brief {
+  const copy: Brief = {
+    topic: brief.topic,
+    audience: brief.audience,
+    cta: brief.cta,
+    tone: brief.tone,
+  };
+  if (brief.link?.trim()) copy.link = brief.link;
+  return copy;
+}
+
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 
-/** Everything a new, loaded, or cleared store starts from. `revision` is left alone on purpose. */
-function blank(): Omit<SessionData, 'revision'> {
+/**
+ * Everything a new, loaded, or cleared store starts from. `revision` and `opening` are left
+ * alone on purpose: both only ever go up.
+ */
+function blank(): Omit<SessionData, 'revision' | 'opening'> {
   return {
     session: null,
     brand: emptyBrand(),
@@ -184,6 +223,7 @@ export const useSessionStore = create<SessionState>()(
     return {
       ...blank(),
       revision: 0,
+      opening: 0,
 
       createSession: (name, brief = emptyBrief()) => {
         blobs.clear();
@@ -203,6 +243,7 @@ export const useSessionStore = create<SessionState>()(
           };
           state.dirty = true;
           state.revision += 1;
+          state.opening += 1;
         });
       },
 
@@ -250,6 +291,17 @@ export const useSessionStore = create<SessionState>()(
         const validation = structuredClone(result);
         mutate((session) => {
           session.cards = session.cards.map((c) => (c.id === id ? { ...c, validation } : c));
+        });
+        return true;
+      },
+
+      setBrief: (brief) => {
+        const open = get().session;
+        if (!open) return false;
+        const next = briefCopy(brief);
+        if (sameValue(briefCopy(open.brief), next)) return true;
+        mutate((session) => {
+          session.brief = next;
         });
         return true;
       },
@@ -345,6 +397,7 @@ export const useSessionStore = create<SessionState>()(
         set((state) => {
           Object.assign(state, blank());
           state.revision += 1;
+          state.opening += 1;
         });
         return true;
       },
@@ -358,6 +411,7 @@ export const useSessionStore = create<SessionState>()(
           state.brand = structuredClone(loaded.brand);
           state.missingAssetIds = [...loaded.missingAssetIds];
           state.revision += 1;
+          state.opening += 1;
         });
       },
 

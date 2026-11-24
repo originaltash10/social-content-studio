@@ -8,8 +8,9 @@ import {
   useSessionStore,
 } from './sessionStore';
 import type { NewCard } from './sessionStore';
+import { serializeSession } from '../lib/session/serialize';
 import { hash, makeAsset, makeBrand, makeCard, makeImageEdit, makeSession } from '../test/fixtures';
-import type { Card, ImageEdit, Session, ValidationResult } from '../types';
+import type { Brief, Card, ImageEdit, Session, ValidationResult } from '../types';
 
 const store = () => useSessionStore.getState();
 
@@ -118,6 +119,15 @@ describe('actions without an open session', () => {
     expect(store().setAssetFocal(hash('a'), { x: 0.2, y: 0.2 })).toBe(false);
     expect(store().undo()).toBe(false);
     expect(store().dirty).toBe(false);
+  });
+
+  it('setBrief does nothing', () => {
+    const revision = store().revision;
+    expect(store().setBrief({ topic: 'T', audience: 'A', cta: 'C', tone: 'formal' })).toBe(false);
+    expect(store().session).toBeNull();
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(store().undoStack).toEqual([]);
   });
 });
 
@@ -360,6 +370,203 @@ describe('setValidation', () => {
     expect(store().undo()).toBe(true);
     expect(open().cards).toEqual([]);
     expect(store().undo()).toBe(false);
+  });
+});
+
+describe('setBrief', () => {
+  const full: Brief = {
+    topic: 'Topping out',
+    audience: 'Clients and recruits',
+    cta: 'See the project page.',
+    link: 'https://example.com/project',
+    tone: 'formal',
+  };
+  const LATER = '2026-11-16T12:05:00.000Z';
+
+  beforeEach(() => store().createSession('S'));
+
+  it('replaces the brief, marks the session as changed, and moves revision and updatedAt on', () => {
+    save();
+    const revision = store().revision;
+    vi.setSystemTime(new Date(LATER));
+    expect(store().setBrief(full)).toBe(true);
+    expect(open().brief).toEqual(full);
+    expect(store().dirty).toBe(true);
+    expect(store().revision).toBe(revision + 1);
+    expect(open().updatedAt).toBe(LATER);
+    expect(open().createdAt).toBe('2026-11-16T12:00:00.000Z');
+  });
+
+  it('adds no undo entry', () => {
+    const id = store().addCard(newCard());
+    const stack = store().undoStack;
+    store().setBrief(full);
+    store().setBrief({ ...full, tone: 'casual' });
+    expect(store().undoStack).toBe(stack);
+    expect(store().undoStack).toEqual([{ cardId: id, before: null }]);
+  });
+
+  it('on a session with no card changes, leaves nothing to undo', () => {
+    store().setBrief(full);
+    expect(store().undoStack).toEqual([]);
+    expect(store().undo()).toBe(false);
+    expect(open().brief).toEqual(full);
+  });
+
+  it('after a card edit and then a brief edit, undo reverts the card and leaves the brief', () => {
+    const id = store().addCard(newCard());
+    const before = cardById(id);
+    store().updateCard(id, (card) => {
+      card.copy.caption = 'Changed';
+    });
+    store().setBrief(full);
+    expect(store().undo()).toBe(true);
+    expect(cardById(id)).toEqual(before);
+    expect(open().brief).toEqual(full);
+    // And again, back to no cards at all: the brief is still the one that was set.
+    expect(store().undo()).toBe(true);
+    expect(open().cards).toEqual([]);
+    expect(open().brief).toEqual(full);
+    expect(store().undo()).toBe(false);
+  });
+
+  it('stores text exactly as typed, with nothing trimmed', () => {
+    const typed: Brief = {
+      topic: '  Topping out \n\n second line  ',
+      audience: '\tCaf\u{E9} owners, na\u{EF}ve users \u{1F44B}\u{1F3FD} ',
+      cta: ' See the project page.  ',
+      link: '  example.com/a page?x=1 ',
+      tone: 'casual',
+    };
+    store().setBrief(typed);
+    expect(open().brief).toEqual(typed);
+    expect(open().brief.cta).toBe(' See the project page.  ');
+    expect(open().brief.link).toBe('  example.com/a page?x=1 ');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['one space', ' '],
+    ['spaces, a tab and line breaks', ' \t\r\n '],
+  ])('leaves the link out when it is %s', (_name, link) => {
+    store().setBrief({ ...full, link });
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(open().brief).toEqual({
+      topic: full.topic,
+      audience: full.audience,
+      cta: full.cta,
+      tone: full.tone,
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only whitespace', ' \t\n '],
+  ])('removes a link the brief had when the new one is %s, as a change', (_name, link) => {
+    store().setBrief(full);
+    save();
+    expect(store().setBrief({ ...full, link })).toBe(true);
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(store().dirty).toBe(true);
+  });
+
+  it('removes a link the brief had when the new brief has none, as a change', () => {
+    store().setBrief(full);
+    save();
+    expect(
+      store().setBrief({
+        topic: full.topic,
+        audience: full.audience,
+        cta: full.cta,
+        tone: full.tone,
+      }),
+    ).toBe(true);
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(store().dirty).toBe(true);
+  });
+
+  it('stores a copy of its argument, with the five fields and nothing else', () => {
+    const given = { ...full, apiKey: 'fake-key-not-real' };
+    store().setBrief(given);
+    expect(open().brief).not.toBe(given);
+    expect(open().brief).toEqual(full);
+    expect(Object.keys(open().brief).sort()).toEqual(['audience', 'cta', 'link', 'tone', 'topic']);
+    given.topic = 'Changed afterwards';
+    given.tone = 'casual';
+    expect(open().brief).toEqual(full);
+  });
+
+  it.each<[keyof Brief, Brief]>([
+    ['topic', { ...full, topic: 'Topping out ' }],
+    ['audience', { ...full, audience: 'clients and recruits' }],
+    ['cta', { ...full, cta: 'See the project page' }],
+    ['link', { ...full, link: 'https://example.com/project/' }],
+    ['tone', { ...full, tone: 'neutral' }],
+  ])('a change to %s alone is a change', (_field, changed) => {
+    store().setBrief(full);
+    save();
+    const revision = store().revision;
+    expect(store().setBrief(changed)).toBe(true);
+    expect(open().brief).toEqual(changed);
+    expect(store().dirty).toBe(true);
+    expect(store().revision).toBe(revision + 1);
+  });
+
+  it('setting an equal brief again is not a change', () => {
+    store().setBrief(full);
+    save();
+    const session = open();
+    const revision = store().revision;
+    vi.setSystemTime(new Date(LATER));
+    expect(store().setBrief({ ...full })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open()).toBe(session);
+    expect(open().updatedAt).toBe('2026-11-16T12:00:00.000Z');
+  });
+
+  it.each<[string, string | undefined]>([
+    ['no link', undefined],
+    ['an empty link', ''],
+    ['a link of only whitespace', ' \t\n '],
+  ])('%s is not a change to a brief that has no link', (_name, link) => {
+    // A new session's brief has no link.
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    save();
+    const session = open();
+    const revision = store().revision;
+    expect(store().setBrief({ ...open().brief, link })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open()).toBe(session);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only whitespace', '  '],
+  ])('a brief with no link is not a change to a loaded brief whose link is %s', (_name, link) => {
+    // session.json may hold such a link: the serializer accepts any string.
+    const session = makeSession({
+      brief: { topic: 'T', audience: 'A', cta: 'C', link, tone: 'formal' },
+    });
+    store().loadSession({
+      session,
+      brand: makeBrand(),
+      blobs: new Map(),
+      missingAssetIds: [],
+      brandMissing: false,
+    });
+    const revision = store().revision;
+    expect(store().setBrief({ topic: 'T', audience: 'A', cta: 'C', tone: 'formal' })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open().brief.link).toBe(link);
+    // A real change then stores the brief without the empty link.
+    expect(store().setBrief({ topic: 'T2', audience: 'A', cta: 'C', link, tone: 'formal' })).toBe(
+      true,
+    );
+    expect(open().brief).toEqual({ topic: 'T2', audience: 'A', cta: 'C', tone: 'formal' });
+    expect(store().dirty).toBe(true);
   });
 });
 
@@ -1156,6 +1363,243 @@ describe('loadSession', () => {
     expect(open()).not.toBe(session);
     expect(Object.isFrozen(session)).toBe(false);
     expect(Object.isFrozen(missing)).toBe(false);
+  });
+});
+
+describe('opening', () => {
+  const loaded = (session = makeSession()) => ({
+    session,
+    brand: makeBrand(),
+    blobs: new Map<string, Blob>(),
+    missingAssetIds: [],
+    brandMissing: false,
+  });
+  const PHOTO = hash('a');
+
+  it('rises by one on createSession, with or without a session open', () => {
+    const start = store().opening;
+    store().createSession('One');
+    expect(store().opening).toBe(start + 1);
+    store().createSession('Two');
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one on loadSession, with or without a session open', () => {
+    const start = store().opening;
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 1);
+    store().loadSession(loaded(makeSession({ id: 'another-session' })));
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one when the same session is loaded again over the open one', () => {
+    store().loadSession(loaded());
+    const start = store().opening;
+    const id = open().id;
+    store().loadSession(loaded());
+    expect(open().id).toBe(id);
+    expect(store().opening).toBe(start + 1);
+    // And with unsaved changes in the open one.
+    store().setBrief({ ...open().brief, topic: 'Changed' });
+    expect(store().dirty).toBe(true);
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one on clearSession, with or without a session open', () => {
+    store().createSession('S');
+    const start = store().opening;
+    expect(store().clearSession(() => true)).toBe(true);
+    expect(store().session).toBeNull();
+    expect(store().opening).toBe(start + 1);
+    expect(store().clearSession(() => true)).toBe(true);
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('does not change when a clear is not confirmed', () => {
+    store().createSession('S');
+    const start = store().opening;
+    expect(store().clearSession(() => false)).toBe(false);
+    expect(store().opening).toBe(start);
+  });
+
+  it('rises twice for a clear and then the same session opened again: once for each', () => {
+    store().loadSession(loaded());
+    const start = store().opening;
+    store().clearSession(() => true);
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 2);
+  });
+
+  describe('is not changed by any other action', () => {
+    let id: string;
+    const failed: ValidationResult = {
+      level: 'fail',
+      issues: [{ rule: 1, level: 'fail', message: 'Wrong size.' }],
+    };
+
+    beforeEach(() => {
+      store().createSession('S');
+      store().addAssets([{ asset: makeAsset(), blob: blob('photo') }]);
+      id = store().addCard(newCard());
+    });
+
+    /** Each action, and a check that it really did something (or, where said, nothing). */
+    const actions: [string, () => void][] = [
+      [
+        'addAssets',
+        () => {
+          store().addAssets([{ asset: makeAsset({ id: hash('b') }) }]);
+          expect(open().assets).toHaveLength(2);
+        },
+      ],
+      [
+        'addCard',
+        () => {
+          store().addCard(newCard());
+          expect(open().cards).toHaveLength(2);
+        },
+      ],
+      [
+        'updateCard',
+        () => {
+          expect(
+            store().updateCard(id, (card) => {
+              card.copy.caption = 'Changed';
+            }),
+          ).toBe(true);
+          expect(cardById(id).copy.caption).toBe('Changed');
+        },
+      ],
+      [
+        'setValidation with a new result',
+        () => {
+          expect(store().setValidation(id, failed)).toBe(true);
+          expect(cardById(id).validation).toEqual(failed);
+        },
+      ],
+      [
+        'setValidation with the result the card has',
+        () => {
+          const revision = store().revision;
+          expect(store().setValidation(id, structuredClone(cardById(id).validation))).toBe(true);
+          expect(store().revision).toBe(revision);
+        },
+      ],
+      [
+        'setAssetFocal',
+        () => {
+          expect(store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 })).toBe(true);
+          expect(open().assets[0]?.focal).toEqual({ x: 0.2, y: 0.7 });
+        },
+      ],
+      [
+        'duplicateCard',
+        () => {
+          expect(store().duplicateCard(id)).not.toBeNull();
+          expect(open().cards).toHaveLength(2);
+        },
+      ],
+      [
+        'setBrief with a new brief',
+        () => {
+          expect(store().setBrief({ ...open().brief, topic: 'Changed', tone: 'casual' })).toBe(
+            true,
+          );
+          expect(open().brief.topic).toBe('Changed');
+        },
+      ],
+      [
+        'setBrief with the brief the session has',
+        () => {
+          const revision = store().revision;
+          expect(store().setBrief({ ...open().brief })).toBe(true);
+          expect(store().revision).toBe(revision);
+        },
+      ],
+      [
+        'undo',
+        () => {
+          expect(store().undo()).toBe(true);
+          expect(open().cards).toEqual([]);
+        },
+      ],
+      [
+        'undo with nothing to undo',
+        () => {
+          expect(store().undo()).toBe(true);
+          expect(store().undo()).toBe(false);
+        },
+      ],
+      [
+        'markSaved',
+        () => {
+          save();
+          expect(store().dirty).toBe(false);
+        },
+      ],
+      [
+        'setStatus',
+        () => {
+          store().setStatus({ kind: 'info', message: 'Saved.' });
+          expect(store().status).toEqual({ kind: 'info', message: 'Saved.' });
+        },
+      ],
+    ];
+
+    it.each(actions)('%s', (_name, action) => {
+      const start = store().opening;
+      const sessionId = open().id;
+      action();
+      expect(store().opening).toBe(start);
+      expect(open().id).toBe(sessionId);
+    });
+  });
+
+  it('is not part of the session, so it is never written to session.json', () => {
+    store().loadSession(loaded());
+    store().createSession('S');
+    store().addAssets([{ asset: makeAsset() }]);
+    store().addCard(newCard());
+    store().setBrief({ ...open().brief, topic: 'Topic', link: 'https://example.com/a' });
+    expect(store().opening).toBeGreaterThan(0);
+    expect(Object.hasOwn(open(), 'opening')).toBe(false);
+    const text = serializeSession(open());
+    expect(text).not.toContain('opening');
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      'version',
+      'id',
+      'name',
+      'createdAt',
+      'updatedAt',
+      'brief',
+      'assets',
+      'cards',
+      'groups',
+    ]);
+  });
+
+  it('is not written even if it ends up on the session object by mistake', () => {
+    store().createSession('S');
+    const stray = { ...open(), opening: store().opening };
+    expect(serializeSession(stray)).not.toContain('opening');
+  });
+
+  it('is in no undo entry, and undo does not put an earlier value back', () => {
+    store().createSession('S');
+    store().addAssets([{ asset: makeAsset() }]);
+    const id = store().addCard(newCard({ assetIds: [PHOTO] }));
+    store().updateCard(id, (card) => {
+      card.copy.caption = 'Changed';
+    });
+    store().duplicateCard(id);
+    store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 });
+    const start = store().opening;
+    expect(store().undoStack).toHaveLength(4);
+    expect(JSON.stringify(store().undoStack)).not.toContain('opening');
+    for (const entry of store().undoStack) expect(Object.hasOwn(entry, 'opening')).toBe(false);
+    while (store().undo());
+    expect(store().opening).toBe(start);
   });
 });
 

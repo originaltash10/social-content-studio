@@ -25,7 +25,7 @@ Import → Pick targets → Generate → Board
 Session autosaves to disk throughout.
 ```
 
-- **Import**: photos, video, and an optional text brief.
+- **Import**: photos, video, and an optional campaign brief (topic, audience, call to action, link, tone).
 - **Pick targets**: platform + placement, one card created per placement.
 - **Generate**: crops, resizes, captions, alt text run in the background.
 - **Board**: one card per variant, with validation badge.
@@ -33,7 +33,7 @@ Session autosaves to disk throughout.
 - **Edit**: duplicate, compare, fix.
 - **Export**: per-platform files plus captions.csv.
 
-Import accepts drag-and-drop of JPG, PNG, HEIC, MP4, and MOV plus an optional text brief. Picking targets creates one card per platform placement (for example, Instagram Reel and LinkedIn video from one clip). Generate runs crops, resizes, and AI copy in the background while the board fills in. Validate runs on every edit, and Export only includes cards that pass or that the user explicitly overrides.
+Import accepts drag-and-drop of JPG, PNG, HEIC, MP4, and MOV plus an optional campaign brief (topic, audience, call to action, link, tone). Picking targets creates one card per platform placement (for example, Instagram Reel and LinkedIn video from one clip). Generate runs crops, resizes, and AI copy in the background while the board fills in. Validate runs on every edit, and Export only includes cards that pass or that the user explicitly overrides.
 
 ## Features by area
 
@@ -42,7 +42,7 @@ Each row is a feature Claude Code should treat as a unit of work. Priority: P1 s
 | Area | Feature | Priority | Notes |
 | --- | --- | --- | --- |
 | Import | Drag-and-drop images and video, HEIC and MOV decoded in browser | P1 | Fall back to a clear "convert first" message if the codec is unsupported |
-| Import | Campaign brief field (topic, audience, CTA, link) | P1 | Fed into every AI prompt |
+| Import | Campaign brief field (topic, audience, CTA, link, tone) | P1 | Fed into every AI prompt |
 | Images | Smart crop with draggable focal point per source image | P1 | One focal point drives all ratios; a duplicated card gets its own |
 | Images | Resize and export to platform dimensions, JPG and PNG, quality slider | P1 | |
 | Images | Fit whole photo: show the whole photo in the placement's shape, with padding | P1 | New cards still fill the frame; padding appears only when the user chooses it |
@@ -367,6 +367,20 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - Copying never changes the card and never adds an undo step. Pressing Copy after typing moves focus out of the box, so the box is written as usual when it is left.
 - A status message next to each button says "Copied." for about 2 seconds. If copying fails, it says "Couldn't copy. Select the text and press Ctrl+C." until the next attempt. If the box is empty or holds only spaces and line breaks, or (for hashtags) no tag that `captions.csv` would write, it says "Nothing to copy yet." for about 2 seconds and the clipboard is left as it was.
 
+### Campaign brief panel
+
+- A session has one campaign brief (`Session.brief`): topic, audience, call to action, link and tone. It is per session, not per card and not per platform. Every field is optional.
+- It is edited in a "Campaign brief" section on the page, between the Import panel and the Board, shown only while a session is open. Under the heading, one short hint says: "Optional. Saved with the session; not exported."
+- Controls, in order: "Topic" and "Audience" are multi-line text boxes. "Call to action" and "Link" are single-line text boxes. Tone is a group of three radio buttons, "Formal", "Neutral" and "Casual", under the legend "Tone". A new session's brief is empty, with Neutral chosen. The Link box is an ordinary text box with spell-checking off; the browser does not check it as a web address.
+- The page's Tab order is: session controls, Import ("Choose files"), Topic, Audience, Call to action, Link, Tone, Board, Export. The card dialog's Tab order is unchanged.
+- There are no counts and no limits: no length limit on any field, and no check on the link's format. The tone is one of `formal`, `neutral` and `casual`.
+- Text is stored exactly as typed, with nothing trimmed, so the call to action is kept word for word. The one exception is an empty link: a Link box that is empty or holds only spaces removes `link` from the brief, so none is written to `session.json`.
+- The four text boxes are written the same way as the caption boxes. Typing changes only the box. The text is written when the person leaves the box, as one change per visit, and not at all if it did not change. A box still being typed in is also written when the page is hidden (another tab, or the tab or window closing). The tone is written as soon as it is chosen.
+- Text is never written to any session but the one it was typed for. If that session is gone or has been replaced before the text was written (New session, opening a folder, loading a `.scs`, or clearing the session), the text is not written anywhere, and the panel shows the new session's brief.
+- Changing the brief marks the session as having unsaved changes, so autosave, Save and Download .scs keep it like any other change. The session `version` stays 1 and the shape of `session.json` is unchanged: `brief` was already part of it. A `session.json` with no `brief` is rejected, as before.
+- The brief is not part of undo (see "Undo"). Changing it adds no undo step, and the app's undo never changes it. Inside a brief text box, Ctrl/Cmd-Z is the browser's own typing undo. On a tone radio button it is the app's undo, as on any radio button: it undoes the last card change and leaves the brief alone.
+- The brief is not used by validation and is not exported. No validation rule reads it: rule 9 reads only the card's caption, so a link in the brief never causes that warning. Nothing from the brief is written to `captions.csv` or to an exported file. Its use is in the AI tasks that come later.
+
 ### Photos
 
 - A photo may store a cached AI description of itself. This is the second exception to "asset files are immutable"; the focal point is the other. The photo's file and its pixels never change.
@@ -429,7 +443,7 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 
 Phase 2 questions this spec does not yet answer:
 
-- [ ] Tone: one setting for the whole session (`Brief.tone`), or one per platform ("Formal for LinkedIn, lighter for Instagram")?
+- [ ] Tone: the session has one tone (`Brief.tone`), built with the campaign brief panel (task 4). Still open: does task 8 add a per-platform override ("Formal for LinkedIn, lighter for Instagram")?
 - [ ] AI usage counter: where is it stored, and what does it count?
 - [ ] Cover slide: what does choosing a carousel's cover slide (`coverIndex`) change?
 - [ ] LinkedIn document carousel: alt text is per slide, but the PDF is one file with one row in `captions.csv`. Where does each slide's alt text go?

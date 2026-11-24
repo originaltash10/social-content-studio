@@ -137,6 +137,28 @@ describe('captionsCsv', () => {
   it('is served as UTF-8 CSV', () => {
     expect(CSV_MIME).toBe('text/csv;charset=utf-8');
   });
+
+  it('has no column for the campaign brief, and writes nothing from one left on a row', () => {
+    const brief = {
+      topic: 'ZZ-TOPIC-4417',
+      audience: 'ZZ-AUDIENCE-5528',
+      cta: 'ZZ-CTA-6639',
+      link: 'https://zz-link-7741.example/path',
+      tone: 'casual',
+    };
+    for (const column of CAPTION_COLUMNS) {
+      expect(column).not.toMatch(/brief|topic|audience|cta|link|tone|campaign/i);
+    }
+    // A row's card is typed to hold only platform, placement and copy; this one carries more.
+    const stray = { ...card({ copy: { caption: 'Caption', altText: 'Alt' } }), brief, ...brief };
+    const csv = captionsCsv([{ path: 'instagram/a.jpg', card: stray, result: 'pass' }]);
+    for (const marker of Object.values(brief)) expect(csv).not.toContain(marker);
+    expect(csv.toLowerCase()).not.toContain('zz-');
+    expect(parse(csv)).toEqual([
+      [...CAPTION_COLUMNS],
+      ['instagram/a.jpg', 'instagram', 'feed-vertical', 'Caption', '', '', 'Alt', 'Pass'],
+    ]);
+  });
 });
 
 describe('hashtagCell', () => {
