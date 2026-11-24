@@ -51,6 +51,7 @@ function draftsOf(copy: Card['copy']): Drafts {
     caption: boxText(copy, 'caption'),
     hashtags: boxText(copy, 'hashtags'),
     firstComment: boxText(copy, 'firstComment'),
+    altText: boxText(copy, 'altText'),
   };
 }
 
@@ -145,6 +146,7 @@ export function CopyFields({ card, spec, record }: CopyFieldsProps) {
           caption: drafts.caption,
           hashtags: parseHashtags(drafts.hashtags),
           firstComment: drafts.firstComment,
+          altText: drafts.altText,
         },
         spec,
       )

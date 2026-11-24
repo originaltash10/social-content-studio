@@ -27,13 +27,14 @@ const text = (over: Partial<CopyText> = {}): CopyText => ({
   caption: '',
   hashtags: [],
   firstComment: '',
+  altText: '',
   ...over,
 });
 
 /** The validator's own result for the same text, as the card's checks would get it. */
 function validatorIssues(t: CopyText, s: PlacementSpec, rules: Issue['rule'][]): Issue[] {
   return validate(
-    { kind: 'image', frames: [], caption: t.caption, hashtags: t.hashtags },
+    { kind: 'image', frames: [], caption: t.caption, hashtags: t.hashtags, altText: t.altText },
     s,
   ).issues.filter((issue) => rules.includes(issue.rule));
 }
@@ -83,6 +84,13 @@ describe('boxText', () => {
     expect(boxText(c, 'firstComment')).toBe('First!');
   });
 
+  it('shows the stored alt text exactly as it is, spaces and line breaks included', () => {
+    expect(boxText(copy({ altText: ' Two lines\nof text ' }), 'altText')).toBe(
+      ' Two lines\nof text ',
+    );
+    expect(boxText(copy(), 'altText')).toBe('');
+  });
+
   it('shows the stored hashtags separated by spaces', () => {
     expect(boxText(copy({ hashtags: ['#a', 'b'] }), 'hashtags')).toBe('#a b');
     expect(boxText(copy(), 'hashtags')).toBe('');
@@ -113,6 +121,7 @@ describe('copyStatus counts characters as the validator does', () => {
   ])('counts %j as %i', (caption, count) => {
     expect(copyStatus(text({ caption }), feed).caption.count).toBe(count);
     expect(copyStatus(text({ firstComment: caption }), feed).firstComment.count).toBe(count);
+    expect(copyStatus(text({ altText: caption }), feed).altText.count).toBe(count);
   });
 
   it('counts only the caption where hashtags go in the first comment', () => {
@@ -135,6 +144,47 @@ describe('copyStatus counts characters as the validator does', () => {
     expect(status.caption.cap).toBe(feed.captionCap);
     expect(status.hashtags.cap).toBe(feed.hashtagCap);
     expect(copyStatus(text(), linkedin).hashtags.cap).toBeNull();
+  });
+});
+
+describe('copyStatus alt text message (rule 8)', () => {
+  const missing = [{ rule: 8, level: 'warn', message: 'Alt text is missing.' }];
+
+  it('warns that alt text is missing for an empty box on every board placement', () => {
+    for (const s of boardSpecs) expect(copyStatus(text(), s).altText.issues).toEqual(missing);
+  });
+
+  it('warns on the Instagram "Reel / Story" placement and every placement that can be a Story', () => {
+    expect(reelStory.canBeStory).toBe(true);
+    const stories = boardSpecs.filter((s) => s.canBeStory);
+    expect(stories).toContain(reelStory);
+    for (const s of stories) expect(copyStatus(text(), s).altText.issues).toEqual(missing);
+  });
+
+  it('counts alt text of only spaces, tabs and line breaks as missing', () => {
+    for (const altText of [' ', '\n', ' \t\r\n ']) {
+      expect(copyStatus(text({ altText }), feed).altText).toEqual({
+        count: charCount(altText),
+        issues: missing,
+      });
+    }
+  });
+
+  it('clears the warning once there is any other text', () => {
+    for (const altText of ['A', ' A crane lifts a beam. ', '\u{1F3D7}\u{FE0F}', 'caf\u{E9}']) {
+      expect(copyStatus(text({ altText }), feed).altText.issues).toEqual([]);
+    }
+  });
+
+  it('keeps rule 8 out of the caption and hashtags messages, and the others out of alt text', () => {
+    const cap = limit(feed.captionCap);
+    const status = copyStatus(
+      text({ caption: 'a'.repeat(cap + 1) + ' example.com', hashtags: ['#a'] }),
+      feed,
+    );
+    expect(status.altText.issues.map((i) => i.rule)).toEqual([8]);
+    expect(status.caption.issues.map((i) => i.rule)).not.toContain(8);
+    expect(status.hashtags.issues.map((i) => i.rule)).not.toContain(8);
   });
 });
 
@@ -250,6 +300,8 @@ describe('copyStatus agrees with validate() on every board placement', () => {
   const tags = (n: number) => Array.from({ length: n }, (_, i) => `#Tag${i}`);
   const inputs: CopyText[] = [
     text(),
+    text({ altText: ' \n ' }),
+    text({ altText: 'A crane lifts the final beam \u{1F3D7}\u{FE0F}\nat the cafe\u{301}.' }),
     text({
       caption:
         'Topping out today \u{1F477}\u{1F3FD}\u{200D}\u{2640}\u{FE0F} at the caf\u{E9}\non site #Build',
@@ -278,6 +330,8 @@ describe('copyStatus agrees with validate() on every board placement', () => {
         expect(status.hashtags.count).toBe(collectHashtags(t.caption, t.hashtags).length);
         expect(status.caption.issues).toEqual(validatorIssues(t, s, [4, 9]));
         expect(status.hashtags.issues).toEqual(validatorIssues(t, s, [5]));
+        expect(status.altText.count).toBe(charCount(t.altText));
+        expect(status.altText.issues).toEqual(validatorIssues(t, s, [8]));
       }
     });
   }
@@ -324,10 +378,39 @@ describe('copyEdit', () => {
     );
   });
 
+  it('is no change when the alt text is exactly what the box showed', () => {
+    const c = copy({ altText: ' A crane\n', authoredBy: by });
+    expect(copyEdit(c, 'altText', ' A crane\n')).toBeNull();
+    expect(copyEdit(copy(), 'altText', '')).toBeNull();
+  });
+
+  it('writes changed alt text exactly as typed and keeps authoredBy', () => {
+    const c = copy({ caption: 'C', altText: 'Old', authoredBy: by });
+    const typed = ' A crane lifts\nthe beam \u{1F3D7}\u{FE0F} at the cafe\u{301} ';
+    expect(applied(c, copyEdit(c, 'altText', typed))).toEqual(
+      copy({ caption: 'C', altText: typed, authoredBy: by }),
+    );
+    // Spaces only are a change too, kept as typed; rule 8 still treats them as missing.
+    expect(applied(c, copyEdit(c, 'altText', '  '))).toEqual(
+      copy({ caption: 'C', altText: '  ', authoredBy: by }),
+    );
+    expect(applied(c, copyEdit(c, 'altText', ''))).toEqual(
+      copy({ caption: 'C', altText: '', authoredBy: by }),
+    );
+  });
+
+  it('writes changed alt text on a card without authoredBy and adds none', () => {
+    const c = copy({ altText: '' });
+    expect(applied(c, copyEdit(c, 'altText', 'New'))).toEqual(copy({ altText: 'New' }));
+  });
+
   it('changes only its own field', () => {
     const c = copy({ caption: 'C', firstComment: 'F', hashtags: ['#h'], altText: 'A' });
     expect(applied(c, copyEdit(c, 'hashtags', '#x'))).toEqual(
       copy({ caption: 'C', firstComment: 'F', hashtags: ['#x'], altText: 'A' }),
+    );
+    expect(applied(c, copyEdit(c, 'altText', 'B'))).toEqual(
+      copy({ caption: 'C', firstComment: 'F', hashtags: ['#h'], altText: 'B' }),
     );
   });
 });

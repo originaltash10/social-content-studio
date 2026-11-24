@@ -97,6 +97,7 @@ function expected(s: PlacementSpec) {
       caption: caption().value,
       hashtags: parseHashtags(hashtags().value),
       firstComment: firstComment().value,
+      altText: '',
     },
     s,
   );
