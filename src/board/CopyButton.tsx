@@ -6,8 +6,8 @@
  * changes the card and never adds an undo step. The button is never disabled.
  *
  * A status message beside it says how it went: "Copied." for about two seconds; the failure
- * message until the next attempt; and, when `text` is empty, "Nothing to copy yet." with the
- * clipboard left as it was. The status element is always in the page, so screen readers hear
+ * message until the next attempt; and, when `text` is empty, "Nothing to copy yet." for about two
+ * seconds, with the clipboard left as it was. The status element is always in the page, so screen readers hear
  * each new message; it is emptied at the start of each attempt, so a second "Copied." in a row
  * is announced again.
  */
@@ -15,7 +15,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 import { buttonClass, resultTextClass } from '../app/styles';
-import { COPIED, COPIED_MS, COPY_FAILED, NOTHING_TO_COPY } from './copyText';
+import { COPIED, STATUS_MS, COPY_FAILED, NOTHING_TO_COPY } from './copyText';
 
 export type CopyButtonProps = {
   /** The accessible name, e.g. "Copy caption". */
@@ -41,11 +41,17 @@ export function CopyButton({ name, text }: CopyButtonProps) {
     [],
   );
 
+  /** Shows a message that clears itself after STATUS_MS. */
+  function showForAWhile(shown: typeof COPIED | typeof NOTHING_TO_COPY) {
+    setMessage(shown);
+    timer.current = setTimeout(() => setMessage(''), STATUS_MS);
+  }
+
   function copy() {
     const current = ++attempt.current;
     clearTimeout(timer.current);
     if (text === '') {
-      setMessage(NOTHING_TO_COPY);
+      showForAWhile(NOTHING_TO_COPY);
       return;
     }
     setMessage('');
@@ -55,8 +61,7 @@ export function CopyButton({ name, text }: CopyButtonProps) {
       .then(
         () => {
           if (current !== attempt.current) return;
-          setMessage(COPIED);
-          timer.current = setTimeout(() => setMessage(''), COPIED_MS);
+          showForAWhile(COPIED);
         },
         () => {
           if (current !== attempt.current) return;

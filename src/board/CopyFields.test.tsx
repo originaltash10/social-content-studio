@@ -17,7 +17,7 @@ import {
   altTextCountText,
   captionCountText,
   COPIED,
-  COPIED_MS,
+  STATUS_MS,
   COPY_FAILED,
   firstCommentCountText,
   hashtagCountText,
@@ -855,14 +855,14 @@ describe('the Copy buttons', () => {
     expect(statusOf('Copy caption')).toHaveTextContent(COPIED);
     expect(COPIED).toBe('Copied.');
     act(() => {
-      vi.advanceTimersByTime(COPIED_MS - 1);
+      vi.advanceTimersByTime(STATUS_MS - 1);
     });
     expect(statusOf('Copy caption')).toHaveTextContent(COPIED);
     act(() => {
       vi.advanceTimersByTime(1);
     });
     expect(statusOf('Copy caption')).toHaveTextContent(/^$/);
-    expect(COPIED_MS).toBe(2000);
+    expect(STATUS_MS).toBe(2000);
   });
 
   it('start the two seconds again on another press', async () => {
@@ -893,6 +893,36 @@ describe('the Copy buttons', () => {
     }
     expect(NOTHING_TO_COPY).toBe('Nothing to copy yet.');
     expect(writeText).not.toHaveBeenCalled();
+  });
+
+  it('say "Nothing to copy yet." for about two seconds, and start again on another press', async () => {
+    vi.useFakeTimers();
+    workingClipboard();
+    openWith('instagram', 'feed-vertical');
+    await press('Copy alt text');
+    expect(statusOf('Copy alt text')).toHaveTextContent(NOTHING_TO_COPY);
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MS - 1);
+    });
+    expect(statusOf('Copy alt text')).toHaveTextContent(NOTHING_TO_COPY);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(statusOf('Copy alt text')).toHaveTextContent(/^$/);
+    // A new press shows it again for a full two seconds, even part-way through the last one.
+    await press('Copy alt text');
+    act(() => {
+      vi.advanceTimersByTime(1500);
+    });
+    await press('Copy alt text');
+    act(() => {
+      vi.advanceTimersByTime(STATUS_MS - 1);
+    });
+    expect(statusOf('Copy alt text')).toHaveTextContent(NOTHING_TO_COPY);
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(statusOf('Copy alt text')).toHaveTextContent(/^$/);
   });
 
   it('treat spaces and line breaks only, and hashtags of bare "#" only, as nothing to copy', async () => {

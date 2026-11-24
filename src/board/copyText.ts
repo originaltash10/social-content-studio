@@ -82,8 +82,8 @@ export const COPIED = 'Copied.';
 export const COPY_FAILED = "Couldn't copy. Select the text and press Ctrl+C.";
 export const NOTHING_TO_COPY = 'Nothing to copy yet.';
 
-/** How long "Copied." stays next to the button. */
-export const COPIED_MS = 2000;
+/** How long "Copied." and "Nothing to copy yet." stay next to the button. */
+export const STATUS_MS = 2000;
 
 /**
  * What a Copy button puts on the clipboard for the text in its box, or "" when there is nothing
