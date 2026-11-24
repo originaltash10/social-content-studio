@@ -9,7 +9,7 @@ import {
 } from './sessionStore';
 import type { NewCard } from './sessionStore';
 import { hash, makeAsset, makeBrand, makeCard, makeImageEdit, makeSession } from '../test/fixtures';
-import type { Card, ImageEdit, Session, ValidationResult } from '../types';
+import type { Brief, Card, ImageEdit, Session, ValidationResult } from '../types';
 
 const store = () => useSessionStore.getState();
 
@@ -118,6 +118,15 @@ describe('actions without an open session', () => {
     expect(store().setAssetFocal(hash('a'), { x: 0.2, y: 0.2 })).toBe(false);
     expect(store().undo()).toBe(false);
     expect(store().dirty).toBe(false);
+  });
+
+  it('setBrief does nothing', () => {
+    const revision = store().revision;
+    expect(store().setBrief({ topic: 'T', audience: 'A', cta: 'C', tone: 'formal' })).toBe(false);
+    expect(store().session).toBeNull();
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(store().undoStack).toEqual([]);
   });
 });
 
@@ -360,6 +369,203 @@ describe('setValidation', () => {
     expect(store().undo()).toBe(true);
     expect(open().cards).toEqual([]);
     expect(store().undo()).toBe(false);
+  });
+});
+
+describe('setBrief', () => {
+  const full: Brief = {
+    topic: 'Topping out',
+    audience: 'Clients and recruits',
+    cta: 'See the project page.',
+    link: 'https://example.com/project',
+    tone: 'formal',
+  };
+  const LATER = '2026-11-16T12:05:00.000Z';
+
+  beforeEach(() => store().createSession('S'));
+
+  it('replaces the brief, marks the session as changed, and moves revision and updatedAt on', () => {
+    save();
+    const revision = store().revision;
+    vi.setSystemTime(new Date(LATER));
+    expect(store().setBrief(full)).toBe(true);
+    expect(open().brief).toEqual(full);
+    expect(store().dirty).toBe(true);
+    expect(store().revision).toBe(revision + 1);
+    expect(open().updatedAt).toBe(LATER);
+    expect(open().createdAt).toBe('2026-11-16T12:00:00.000Z');
+  });
+
+  it('adds no undo entry', () => {
+    const id = store().addCard(newCard());
+    const stack = store().undoStack;
+    store().setBrief(full);
+    store().setBrief({ ...full, tone: 'casual' });
+    expect(store().undoStack).toBe(stack);
+    expect(store().undoStack).toEqual([{ cardId: id, before: null }]);
+  });
+
+  it('on a session with no card changes, leaves nothing to undo', () => {
+    store().setBrief(full);
+    expect(store().undoStack).toEqual([]);
+    expect(store().undo()).toBe(false);
+    expect(open().brief).toEqual(full);
+  });
+
+  it('after a card edit and then a brief edit, undo reverts the card and leaves the brief', () => {
+    const id = store().addCard(newCard());
+    const before = cardById(id);
+    store().updateCard(id, (card) => {
+      card.copy.caption = 'Changed';
+    });
+    store().setBrief(full);
+    expect(store().undo()).toBe(true);
+    expect(cardById(id)).toEqual(before);
+    expect(open().brief).toEqual(full);
+    // And again, back to no cards at all: the brief is still the one that was set.
+    expect(store().undo()).toBe(true);
+    expect(open().cards).toEqual([]);
+    expect(open().brief).toEqual(full);
+    expect(store().undo()).toBe(false);
+  });
+
+  it('stores text exactly as typed, with nothing trimmed', () => {
+    const typed: Brief = {
+      topic: '  Topping out \n\n second line  ',
+      audience: '\tCaf\u{E9} owners, na\u{EF}ve users \u{1F44B}\u{1F3FD} ',
+      cta: ' See the project page.  ',
+      link: '  example.com/a page?x=1 ',
+      tone: 'casual',
+    };
+    store().setBrief(typed);
+    expect(open().brief).toEqual(typed);
+    expect(open().brief.cta).toBe(' See the project page.  ');
+    expect(open().brief.link).toBe('  example.com/a page?x=1 ');
+  });
+
+  it.each([
+    ['empty', ''],
+    ['one space', ' '],
+    ['spaces, a tab and line breaks', ' \t\r\n '],
+  ])('leaves the link out when it is %s', (_name, link) => {
+    store().setBrief({ ...full, link });
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(open().brief).toEqual({
+      topic: full.topic,
+      audience: full.audience,
+      cta: full.cta,
+      tone: full.tone,
+    });
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only whitespace', ' \t\n '],
+  ])('removes a link the brief had when the new one is %s, as a change', (_name, link) => {
+    store().setBrief(full);
+    save();
+    expect(store().setBrief({ ...full, link })).toBe(true);
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(store().dirty).toBe(true);
+  });
+
+  it('removes a link the brief had when the new brief has none, as a change', () => {
+    store().setBrief(full);
+    save();
+    expect(
+      store().setBrief({
+        topic: full.topic,
+        audience: full.audience,
+        cta: full.cta,
+        tone: full.tone,
+      }),
+    ).toBe(true);
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    expect(store().dirty).toBe(true);
+  });
+
+  it('stores a copy of its argument, with the five fields and nothing else', () => {
+    const given = { ...full, apiKey: 'fake-key-not-real' };
+    store().setBrief(given);
+    expect(open().brief).not.toBe(given);
+    expect(open().brief).toEqual(full);
+    expect(Object.keys(open().brief).sort()).toEqual(['audience', 'cta', 'link', 'tone', 'topic']);
+    given.topic = 'Changed afterwards';
+    given.tone = 'casual';
+    expect(open().brief).toEqual(full);
+  });
+
+  it.each<[keyof Brief, Brief]>([
+    ['topic', { ...full, topic: 'Topping out ' }],
+    ['audience', { ...full, audience: 'clients and recruits' }],
+    ['cta', { ...full, cta: 'See the project page' }],
+    ['link', { ...full, link: 'https://example.com/project/' }],
+    ['tone', { ...full, tone: 'neutral' }],
+  ])('a change to %s alone is a change', (_field, changed) => {
+    store().setBrief(full);
+    save();
+    const revision = store().revision;
+    expect(store().setBrief(changed)).toBe(true);
+    expect(open().brief).toEqual(changed);
+    expect(store().dirty).toBe(true);
+    expect(store().revision).toBe(revision + 1);
+  });
+
+  it('setting an equal brief again is not a change', () => {
+    store().setBrief(full);
+    save();
+    const session = open();
+    const revision = store().revision;
+    vi.setSystemTime(new Date(LATER));
+    expect(store().setBrief({ ...full })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open()).toBe(session);
+    expect(open().updatedAt).toBe('2026-11-16T12:00:00.000Z');
+  });
+
+  it.each<[string, string | undefined]>([
+    ['no link', undefined],
+    ['an empty link', ''],
+    ['a link of only whitespace', ' \t\n '],
+  ])('%s is not a change to a brief that has no link', (_name, link) => {
+    // A new session's brief has no link.
+    expect(Object.hasOwn(open().brief, 'link')).toBe(false);
+    save();
+    const session = open();
+    const revision = store().revision;
+    expect(store().setBrief({ ...open().brief, link })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open()).toBe(session);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only whitespace', '  '],
+  ])('a brief with no link is not a change to a loaded brief whose link is %s', (_name, link) => {
+    // session.json may hold such a link: the serializer accepts any string.
+    const session = makeSession({
+      brief: { topic: 'T', audience: 'A', cta: 'C', link, tone: 'formal' },
+    });
+    store().loadSession({
+      session,
+      brand: makeBrand(),
+      blobs: new Map(),
+      missingAssetIds: [],
+      brandMissing: false,
+    });
+    const revision = store().revision;
+    expect(store().setBrief({ topic: 'T', audience: 'A', cta: 'C', tone: 'formal' })).toBe(true);
+    expect(store().dirty).toBe(false);
+    expect(store().revision).toBe(revision);
+    expect(open().brief.link).toBe(link);
+    // A real change then stores the brief without the empty link.
+    expect(store().setBrief({ topic: 'T2', audience: 'A', cta: 'C', link, tone: 'formal' })).toBe(
+      true,
+    );
+    expect(open().brief).toEqual({ topic: 'T2', audience: 'A', cta: 'C', tone: 'formal' });
+    expect(store().dirty).toBe(true);
   });
 });
 

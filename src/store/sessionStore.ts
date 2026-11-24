@@ -13,6 +13,8 @@
  * - Clearing needs confirmation and touches nothing on disk (the store never touches disk).
  * - A card's validation result is the validator's output, not an edit, so recording it is not
  *   an undo step, and recording the same result again is not a change.
+ * - "The campaign brief and the brand kit are not cards and are not part of undo." Changing the
+ *   brief (`setBrief`) is a change to save, never an undo step.
  *
  * API keys are not part of this store. They live in IndexedDB only (Settings, Phase 2).
  */
@@ -76,6 +78,14 @@ type SessionActions = {
    */
   setValidation: (id: string, result: ValidationResult) => boolean;
   /**
+   * Replaces the campaign brief with a copy of `brief`. It is not an undo step, and undo never
+   * changes the brief. Text is kept exactly as given, except that a link that is empty or only
+   * whitespace is left out. A brief equal to the open one in all five fields, where no link and
+   * an empty link are the same, changes nothing, so it does not mark the session as changed.
+   * Returns false if no session is open.
+   */
+  setBrief: (brief: Brief) => boolean;
+  /**
    * Moves a photo's focal point and gives the listed cards their new crops, as one change and
    * one undo step. The point is kept inside 0..1. A crop is applied only to a single-photo
    * card of this photo that shares the photo's focal point: a card with its own focal point is
@@ -124,6 +134,21 @@ export function assetBlobs(): ReadonlyMap<string, Blob> {
 
 export function emptyBrief(): Brief {
   return { topic: '', audience: '', cta: '', tone: 'neutral' };
+}
+
+/**
+ * A copy of a brief holding its five fields and nothing else. A link that is empty or only
+ * whitespace is left out; all other text is kept exactly as it is.
+ */
+function briefCopy(brief: Brief): Brief {
+  const copy: Brief = {
+    topic: brief.topic,
+    audience: brief.audience,
+    cta: brief.cta,
+    tone: brief.tone,
+  };
+  if (brief.link?.trim()) copy.link = brief.link;
+  return copy;
 }
 
 const now = () => new Date().toISOString();
@@ -250,6 +275,17 @@ export const useSessionStore = create<SessionState>()(
         const validation = structuredClone(result);
         mutate((session) => {
           session.cards = session.cards.map((c) => (c.id === id ? { ...c, validation } : c));
+        });
+        return true;
+      },
+
+      setBrief: (brief) => {
+        const open = get().session;
+        if (!open) return false;
+        const next = briefCopy(brief);
+        if (sameValue(briefCopy(open.brief), next)) return true;
+        mutate((session) => {
+          session.brief = next;
         });
         return true;
       },
