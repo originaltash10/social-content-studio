@@ -365,7 +365,7 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - The caption, hashtags, first comment and alt text boxes each have a Copy button right after them. Its visible text is "Copy"; its accessible name is "Copy caption", "Copy hashtags", "Copy first comment" or "Copy alt text". It is never disabled.
 - It copies what the box holds now, including text not yet written to the card. The caption, first comment and alt text are copied exactly as typed. Hashtags are copied as `captions.csv` writes them, by the export's own function: each tag with "#" added where missing, separated by single spaces.
 - Copying never changes the card and never adds an undo step. Pressing Copy after typing moves focus out of the box, so the box is written as usual when it is left.
-- A status message next to each button says "Copied." for about 2 seconds. If copying fails, it says "Couldn't copy. Select the text and press Ctrl+C." until the next attempt. If the box is empty or holds only spaces and line breaks, or (for hashtags) no tag that `captions.csv` would write, it says "Nothing to copy yet." and the clipboard is left as it was.
+- A status message next to each button says "Copied." for about 2 seconds. If copying fails, it says "Couldn't copy. Select the text and press Ctrl+C." until the next attempt. If the box is empty or holds only spaces and line breaks, or (for hashtags) no tag that `captions.csv` would write, it says "Nothing to copy yet." for about 2 seconds and the clipboard is left as it was.
 
 ### Photos
 
