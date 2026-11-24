@@ -8,6 +8,7 @@ import {
   useSessionStore,
 } from './sessionStore';
 import type { NewCard } from './sessionStore';
+import { serializeSession } from '../lib/session/serialize';
 import { hash, makeAsset, makeBrand, makeCard, makeImageEdit, makeSession } from '../test/fixtures';
 import type { Brief, Card, ImageEdit, Session, ValidationResult } from '../types';
 
@@ -1362,6 +1363,243 @@ describe('loadSession', () => {
     expect(open()).not.toBe(session);
     expect(Object.isFrozen(session)).toBe(false);
     expect(Object.isFrozen(missing)).toBe(false);
+  });
+});
+
+describe('opening', () => {
+  const loaded = (session = makeSession()) => ({
+    session,
+    brand: makeBrand(),
+    blobs: new Map<string, Blob>(),
+    missingAssetIds: [],
+    brandMissing: false,
+  });
+  const PHOTO = hash('a');
+
+  it('rises by one on createSession, with or without a session open', () => {
+    const start = store().opening;
+    store().createSession('One');
+    expect(store().opening).toBe(start + 1);
+    store().createSession('Two');
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one on loadSession, with or without a session open', () => {
+    const start = store().opening;
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 1);
+    store().loadSession(loaded(makeSession({ id: 'another-session' })));
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one when the same session is loaded again over the open one', () => {
+    store().loadSession(loaded());
+    const start = store().opening;
+    const id = open().id;
+    store().loadSession(loaded());
+    expect(open().id).toBe(id);
+    expect(store().opening).toBe(start + 1);
+    // And with unsaved changes in the open one.
+    store().setBrief({ ...open().brief, topic: 'Changed' });
+    expect(store().dirty).toBe(true);
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('rises by one on clearSession, with or without a session open', () => {
+    store().createSession('S');
+    const start = store().opening;
+    expect(store().clearSession(() => true)).toBe(true);
+    expect(store().session).toBeNull();
+    expect(store().opening).toBe(start + 1);
+    expect(store().clearSession(() => true)).toBe(true);
+    expect(store().opening).toBe(start + 2);
+  });
+
+  it('does not change when a clear is not confirmed', () => {
+    store().createSession('S');
+    const start = store().opening;
+    expect(store().clearSession(() => false)).toBe(false);
+    expect(store().opening).toBe(start);
+  });
+
+  it('rises twice for a clear and then the same session opened again: once for each', () => {
+    store().loadSession(loaded());
+    const start = store().opening;
+    store().clearSession(() => true);
+    store().loadSession(loaded());
+    expect(store().opening).toBe(start + 2);
+  });
+
+  describe('is not changed by any other action', () => {
+    let id: string;
+    const failed: ValidationResult = {
+      level: 'fail',
+      issues: [{ rule: 1, level: 'fail', message: 'Wrong size.' }],
+    };
+
+    beforeEach(() => {
+      store().createSession('S');
+      store().addAssets([{ asset: makeAsset(), blob: blob('photo') }]);
+      id = store().addCard(newCard());
+    });
+
+    /** Each action, and a check that it really did something (or, where said, nothing). */
+    const actions: [string, () => void][] = [
+      [
+        'addAssets',
+        () => {
+          store().addAssets([{ asset: makeAsset({ id: hash('b') }) }]);
+          expect(open().assets).toHaveLength(2);
+        },
+      ],
+      [
+        'addCard',
+        () => {
+          store().addCard(newCard());
+          expect(open().cards).toHaveLength(2);
+        },
+      ],
+      [
+        'updateCard',
+        () => {
+          expect(
+            store().updateCard(id, (card) => {
+              card.copy.caption = 'Changed';
+            }),
+          ).toBe(true);
+          expect(cardById(id).copy.caption).toBe('Changed');
+        },
+      ],
+      [
+        'setValidation with a new result',
+        () => {
+          expect(store().setValidation(id, failed)).toBe(true);
+          expect(cardById(id).validation).toEqual(failed);
+        },
+      ],
+      [
+        'setValidation with the result the card has',
+        () => {
+          const revision = store().revision;
+          expect(store().setValidation(id, structuredClone(cardById(id).validation))).toBe(true);
+          expect(store().revision).toBe(revision);
+        },
+      ],
+      [
+        'setAssetFocal',
+        () => {
+          expect(store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 })).toBe(true);
+          expect(open().assets[0]?.focal).toEqual({ x: 0.2, y: 0.7 });
+        },
+      ],
+      [
+        'duplicateCard',
+        () => {
+          expect(store().duplicateCard(id)).not.toBeNull();
+          expect(open().cards).toHaveLength(2);
+        },
+      ],
+      [
+        'setBrief with a new brief',
+        () => {
+          expect(store().setBrief({ ...open().brief, topic: 'Changed', tone: 'casual' })).toBe(
+            true,
+          );
+          expect(open().brief.topic).toBe('Changed');
+        },
+      ],
+      [
+        'setBrief with the brief the session has',
+        () => {
+          const revision = store().revision;
+          expect(store().setBrief({ ...open().brief })).toBe(true);
+          expect(store().revision).toBe(revision);
+        },
+      ],
+      [
+        'undo',
+        () => {
+          expect(store().undo()).toBe(true);
+          expect(open().cards).toEqual([]);
+        },
+      ],
+      [
+        'undo with nothing to undo',
+        () => {
+          expect(store().undo()).toBe(true);
+          expect(store().undo()).toBe(false);
+        },
+      ],
+      [
+        'markSaved',
+        () => {
+          save();
+          expect(store().dirty).toBe(false);
+        },
+      ],
+      [
+        'setStatus',
+        () => {
+          store().setStatus({ kind: 'info', message: 'Saved.' });
+          expect(store().status).toEqual({ kind: 'info', message: 'Saved.' });
+        },
+      ],
+    ];
+
+    it.each(actions)('%s', (_name, action) => {
+      const start = store().opening;
+      const sessionId = open().id;
+      action();
+      expect(store().opening).toBe(start);
+      expect(open().id).toBe(sessionId);
+    });
+  });
+
+  it('is not part of the session, so it is never written to session.json', () => {
+    store().loadSession(loaded());
+    store().createSession('S');
+    store().addAssets([{ asset: makeAsset() }]);
+    store().addCard(newCard());
+    store().setBrief({ ...open().brief, topic: 'Topic', link: 'https://example.com/a' });
+    expect(store().opening).toBeGreaterThan(0);
+    expect(Object.hasOwn(open(), 'opening')).toBe(false);
+    const text = serializeSession(open());
+    expect(text).not.toContain('opening');
+    expect(Object.keys(JSON.parse(text) as object)).toEqual([
+      'version',
+      'id',
+      'name',
+      'createdAt',
+      'updatedAt',
+      'brief',
+      'assets',
+      'cards',
+      'groups',
+    ]);
+  });
+
+  it('is not written even if it ends up on the session object by mistake', () => {
+    store().createSession('S');
+    const stray = { ...open(), opening: store().opening };
+    expect(serializeSession(stray)).not.toContain('opening');
+  });
+
+  it('is in no undo entry, and undo does not put an earlier value back', () => {
+    store().createSession('S');
+    store().addAssets([{ asset: makeAsset() }]);
+    const id = store().addCard(newCard({ assetIds: [PHOTO] }));
+    store().updateCard(id, (card) => {
+      card.copy.caption = 'Changed';
+    });
+    store().duplicateCard(id);
+    store().setAssetFocal(PHOTO, { x: 0.2, y: 0.7 });
+    const start = store().opening;
+    expect(store().undoStack).toHaveLength(4);
+    expect(JSON.stringify(store().undoStack)).not.toContain('opening');
+    for (const entry of store().undoStack) expect(Object.hasOwn(entry, 'opening')).toBe(false);
+    while (store().undo());
+    expect(store().opening).toBe(start);
   });
 });
 

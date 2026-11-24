@@ -15,6 +15,9 @@
  *   an undo step, and recording the same result again is not a change.
  * - "The campaign brief and the brand kit are not cards and are not part of undo." Changing the
  *   brief (`setBrief`) is a change to save, never an undo step.
+ * - Text typed for one session is never written to another (SPEC.md, "Campaign brief panel").
+ *   `opening` counts each time a session is put in the store afresh or taken away, so a panel
+ *   can tell whether the session it holds typing for is still the open one.
  *
  * API keys are not part of this store. They live in IndexedDB only (Settings, Phase 2).
  */
@@ -55,6 +58,14 @@ type SessionData = {
   dirty: boolean;
   /** Goes up by one on every change; lets a save tell whether anything changed while it ran. */
   revision: number;
+  /**
+   * Goes up by one each time a session is put in the store afresh or taken away: by
+   * `createSession`, `loadSession` and `clearSession`, and by nothing else. An edit leaves it
+   * alone. The session's id cannot do this job: clearing a session and opening it again, or
+   * loading the same session over the open one, gives the same id. Memory only: it is not part
+   * of the session, never written to a file, and not part of undo.
+   */
+  opening: number;
   lastSavedAt: string | null;
   /** Assets whose file could not be found on load. Memory only; never written to a file. */
   missingAssetIds: string[];
@@ -154,8 +165,11 @@ function briefCopy(brief: Brief): Brief {
 const now = () => new Date().toISOString();
 const newId = () => crypto.randomUUID();
 
-/** Everything a new, loaded, or cleared store starts from. `revision` is left alone on purpose. */
-function blank(): Omit<SessionData, 'revision'> {
+/**
+ * Everything a new, loaded, or cleared store starts from. `revision` and `opening` are left
+ * alone on purpose: both only ever go up.
+ */
+function blank(): Omit<SessionData, 'revision' | 'opening'> {
   return {
     session: null,
     brand: emptyBrand(),
@@ -209,6 +223,7 @@ export const useSessionStore = create<SessionState>()(
     return {
       ...blank(),
       revision: 0,
+      opening: 0,
 
       createSession: (name, brief = emptyBrief()) => {
         blobs.clear();
@@ -228,6 +243,7 @@ export const useSessionStore = create<SessionState>()(
           };
           state.dirty = true;
           state.revision += 1;
+          state.opening += 1;
         });
       },
 
@@ -381,6 +397,7 @@ export const useSessionStore = create<SessionState>()(
         set((state) => {
           Object.assign(state, blank());
           state.revision += 1;
+          state.opening += 1;
         });
         return true;
       },
@@ -394,6 +411,7 @@ export const useSessionStore = create<SessionState>()(
           state.brand = structuredClone(loaded.brand);
           state.missingAssetIds = [...loaded.missingAssetIds];
           state.revision += 1;
+          state.opening += 1;
         });
       },
 
