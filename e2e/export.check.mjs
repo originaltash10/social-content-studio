@@ -40,6 +40,10 @@
  * the colour in every padding pixel (within the JPG tolerances in e2e/paddingPixels.mjs), and
  * the same card exported as a PNG has it exactly; both are still clean files at their size.
  *
+ * Then, in a new session, the caption boxes (`runCopyExport`): a caption, hashtags and a first
+ * comment are typed into a card's boxes, reached with Tab, and exported as a zip; the card's row
+ * in captions.csv holds exactly that text, with the hashtags as the export writes them.
+ *
  * Like the other checks in this folder, it needs Playwright with Chromium already installed on
  * the machine, and is not part of `npm test` or the deploy workflow. Nothing it produces is
  * written inside the repository except the normal `dist` build.
@@ -1032,6 +1036,162 @@ async function runPaddingExport(browser, name, url) {
   return checks.every((c) => c.ok);
 }
 
+// --------------------------------------------------------------------------- caption boxes
+
+/** A plain test photo drawn in the browser and saved as a PNG: no camera data of any kind. */
+async function makePlainPng(page) {
+  const base64 = await page.evaluate(async () => {
+    const canvas = new OffscreenCanvas(2400, 1800);
+    const g = canvas.getContext('2d');
+    const gradient = g.createLinearGradient(0, 0, 2400, 1800);
+    gradient.addColorStop(0, '#2d6a4f');
+    gradient.addColorStop(1, '#f4a261');
+    g.fillStyle = gradient;
+    g.fillRect(0, 0, 2400, 1800);
+    const bytes = new Uint8Array(
+      await (await canvas.convertToBlob({ type: 'image/png' })).arrayBuffer(),
+    );
+    let text = '';
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      text += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    }
+    return btoa(text);
+  });
+  return Buffer.from(base64, 'base64');
+}
+
+/** What a person types into each box. The caption has a comma and quotes, which CSV escapes. */
+const TYPED = {
+  caption: 'Topping out, "on time" today',
+  hashtags: '#build, site',
+  firstComment: 'Full story on our news page',
+};
+/**
+ * The hashtags cell as the export writes it, worked out here: the box splits on spaces and
+ * commas, and each tag is written with one leading "#", separated by spaces.
+ */
+const TYPED_HASHTAG_CELL = TYPED.hashtags
+  .split(/[\s,]+/)
+  .filter(Boolean)
+  .map((tag) => (tag.startsWith('#') ? tag : `#${tag}`))
+  .join(' ');
+
+async function runCopyExport(browser, name, url) {
+  console.log(`\n== Export check, caption boxes: ${name} (${url})`);
+  const context = await browser.newContext({ acceptDownloads: true });
+  const problems = [];
+  context.on('response', (response) => {
+    if (response.status() >= 400) problems.push(`HTTP ${response.status()}: ${response.url()}`);
+  });
+  context.on('requestfailed', (request) => problems.push(`request failed: ${request.url()}`));
+  const page = await context.newPage();
+  page.on('console', (message) => {
+    if (message.type() === 'error') problems.push(`console: ${message.text()}`);
+  });
+  page.on('pageerror', (error) => problems.push(`page error: ${error.message}`));
+  page.on('dialog', (dialog) => dialog.accept());
+
+  const checks = [];
+  const check = (title, ok, detail = '') => {
+    checks.push({ title, ok, detail });
+    console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${title}${detail ? `: ${detail}` : ''}`);
+  };
+  const photoName = 'copy-check.png';
+  const card = `Instagram Feed vertical for ${photoName}, v1`;
+
+  try {
+    await page.goto(url, { waitUntil: 'load' });
+    await page.getByLabel('Name').fill(SESSION_NAME);
+    await page.getByRole('button', { name: 'New session' }).click();
+    const photo = await makePlainPng(page);
+    check(
+      'the generated test photo is a plain PNG with no metadata chunks',
+      pngFindings(photo).length === 0,
+      `chunk types: ${[...new Set(pngChunks(photo))].join(', ')}`,
+    );
+    // The system's file picker cannot be driven, so the file is given to the input directly.
+    await page.getByLabel('Photos to import').setInputFiles({
+      name: photoName,
+      mimeType: 'image/png',
+      buffer: photo,
+    });
+    await page.getByRole('status').filter({ hasText: 'Import finished' }).first().waitFor();
+    await page.getByRole('button', { name: 'Create cards' }).click();
+    const form = page.getByRole('form', { name: 'Create cards' });
+    await form.getByRole('checkbox', { name: /^Feed vertical \(/ }).check();
+    await form.getByRole('button', { name: 'Create' }).click();
+    await page
+      .getByRole('status', { name: 'Render progress' })
+      .filter({ hasText: /^Rendered 1 card: / })
+      .waitFor({ timeout: 60_000 });
+
+    // Each box is reached with Tab from the dialog's heading and typed into with the keyboard.
+    await page.getByRole('button', { name: `Open ${card}`, exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Instagram Feed vertical' });
+    await dialog.waitFor();
+    for (const [label, text] of [
+      ['Caption', TYPED.caption],
+      ['Hashtags', TYPED.hashtags],
+      ['First comment', TYPED.firstComment],
+    ]) {
+      const box = dialog.getByLabel(label, { exact: true });
+      let presses = 0;
+      while (!(await box.evaluate((element) => element === document.activeElement))) {
+        if (++presses > 40) throw new Error(`Tab did not reach the ${label} box`);
+        await page.keyboard.press('Tab');
+      }
+      await page.keyboard.type(text);
+    }
+    // Leaving the last box with Tab writes it; Esc then closes the dialog.
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Escape');
+    await dialog.waitFor({ state: 'hidden' });
+
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.getByRole('button', { name: 'Download as .zip' }).click(),
+    ]);
+    const path = join(outDir, `${name}-copy.zip`);
+    await download.saveAs(path);
+    await page.getByRole('region', { name: 'Export results' }).waitFor({ timeout: 60_000 });
+    const zip = await JSZip.loadAsync(readFileSync(path));
+    const csvFile = zip.file('captions.csv');
+    const csv = csvFile ? readCsv(Buffer.from(await csvFile.async('uint8array'))) : null;
+    const rows = csv ? csv.rows.filter((row) => row[1] === 'instagram') : [];
+    const row = rows[0] ?? [];
+    const columns = (csv?.header ?? []).reduce((all, column, index) => {
+      all[column] = row[index];
+      return all;
+    }, {});
+    check(
+      "captions.csv's row for the card holds exactly the typed caption, hashtags and first comment",
+      csv?.header.join(',') === HEADER &&
+        rows.length === 1 &&
+        columns.caption === TYPED.caption &&
+        columns.hashtags === TYPED_HASHTAG_CELL &&
+        columns.first_comment === TYPED.firstComment,
+      `caption ${JSON.stringify(columns.caption)}, hashtags ${JSON.stringify(columns.hashtags)}, first_comment ${JSON.stringify(columns.first_comment)}`,
+    );
+    check('no failed requests and no console errors', problems.length === 0, problems.join(' | '));
+    writeFileSync(
+      join(outDir, `${name}-copy-report.json`),
+      JSON.stringify({ checks, problems }, null, 2),
+    );
+  } catch (error) {
+    const lines = String(error).split('\n');
+    const call = lines.find((line) => line.includes('- waiting for '));
+    const waiting = call?.slice(call.indexOf('waiting for ')).split(String.fromCharCode(27))[0];
+    check(
+      'the check ran to the end',
+      false,
+      waiting ? `${lines[0]} It was ${waiting.trim()}.` : (lines[0] ?? ''),
+    );
+  } finally {
+    await context.close();
+  }
+  return checks.every((c) => c.ok);
+}
+
 let failed = false;
 const browser = await chromium.launch();
 try {
@@ -1041,6 +1201,7 @@ try {
   await serve(['--port', String(PORTS.dev), '--strictPort'], {}, devUrl);
   failed = !(await runExportCheck(browser, 'dev', devUrl)) || failed;
   failed = !(await runPaddingExport(browser, 'dev', devUrl)) || failed;
+  failed = !(await runCopyExport(browser, 'dev', devUrl)) || failed;
 
   console.log(`\n== Production build with BASE_PATH=${BASE}`);
   execFileSync('npm', ['run', 'build'], {
@@ -1056,6 +1217,7 @@ try {
   );
   failed = !(await runExportCheck(browser, 'production', siteUrl)) || failed;
   failed = !(await runPaddingExport(browser, 'production', siteUrl)) || failed;
+  failed = !(await runCopyExport(browser, 'production', siteUrl)) || failed;
 } catch (error) {
   failed = true;
   console.error(error);

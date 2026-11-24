@@ -4,6 +4,9 @@
 export const focusClass =
   'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent';
 
+/** Shared text box: the session name, and the card's caption, hashtags and first comment. */
+export const textFieldClass = `rounded-control border border-muted bg-surface px-2 py-1 text-ink ${focusClass}`;
+
 /** Shared button shape. Disabled buttons fade to half opacity and lose their hover change. */
 const buttonBase = `rounded-button border px-3 py-1 font-medium disabled:cursor-not-allowed disabled:opacity-50 ${focusClass}`;
 

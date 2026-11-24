@@ -1549,6 +1549,7 @@ async function runPadding(browser, name, url) {
         const element = document.activeElement;
         if (element.getAttribute('role') === 'application') return 'crop area';
         if (element.dataset.testid === 'focal-marker') return 'focal point';
+        if (element.tagName === 'TEXTAREA') return element.labels?.[0]?.textContent ?? 'text box';
         if (element.tagName === 'INPUT') {
           const kinds = {
             color: 'colour picker',
@@ -1567,6 +1568,9 @@ async function runPadding(browser, name, url) {
     return order;
   };
   const focusCrop = async () => {
+    // Tab through the whole dialog leaves it scrolled down to Close, past the caption boxes, so
+    // the crop area is scrolled back into view first, as a person would, before it is clicked.
+    await dialog.getByRole('application').scrollIntoViewIfNeeded();
     await clickCrop(page);
   };
   const undo = () => page.keyboard.press('Control+z');
@@ -1594,7 +1598,17 @@ async function runPadding(browser, name, url) {
       await focusCrop();
       await undo();
       feedSrc = await nextRender(page, FEED_CARD, feedSrc);
-      const rest = ['Fit whole photo', 'colour picker', 'hex box', 'file type', 'quality', 'Close'];
+      const rest = [
+        'Fit whole photo',
+        'colour picker',
+        'hex box',
+        'file type',
+        'quality',
+        'Caption',
+        'Hashtags',
+        'First comment',
+        'Close',
+      ];
       const want = ['crop area', 'focal point', ...rest];
       const wantMoved = ['crop area', 'focal point', 'Reset crop', ...rest];
       check(

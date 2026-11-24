@@ -212,6 +212,11 @@ export type PlacementSpec = {
    * cap (rule 4). False where hashtags go in the first comment (Instagram).
    */
   hashtagsInCaption: boolean;
+  /**
+   * True where the placement can be posted as a Story, which shows no caption, hashtags or first
+   * comment. The card dialog notes this under its caption boxes; validation does not read it.
+   */
+  canBeStory: boolean;
   safeZone: SafeZone | null;
   /** ISO dates each group of values was last checked against its source. */
   verified: { sizes: string; limits: string };

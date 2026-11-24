@@ -177,24 +177,28 @@ export function Board({
   const backgroundPreview = trying !== null && trying.cardId === openId ? trying.colour : null;
 
   // Show or close the dialog to match the open card. If the card goes away (undo), close it.
+  // This follows the open card's id, not the card itself: when Esc closes the dialog, a text box
+  // in it writes its text as it loses focus, which changes the card before the dialog's close
+  // event arrives. Following the card would open the dialog again at that moment.
+  const openCardId = openCard?.id ?? null;
   useEffect(() => {
     const element = dialog.current;
     if (!element) return;
-    if (openCard && !element.open) {
+    if (openCardId !== null && !element.open) {
       element.showModal();
       // The board must stay where it is behind the dialog (src/board/scrollLock.ts).
       unlockScroll.current = lockPageScroll();
       // The browser puts focus on the first control it finds, which is past the editor while
       // the photo is still being opened. Start at the heading instead, so Tab goes through the
       // dialog from the top: crop area, focal point, Reset crop, Fit whole photo, background
-      // colour, file type, and Close last.
+      // colour, file type, the caption boxes, and Close last.
       document.getElementById(dialogHeadingId)?.focus({ preventScroll: true });
       // In a short window that first control can be below the fold, and the browser scrolls
       // the dialog down to it before the focus is moved. Start at the top of the dialog too.
       element.scrollTop = 0;
     }
-    if (!openCard && element.open) element.close();
-  }, [openCard, dialogHeadingId]);
+    if (openCardId === null && element.open) element.close();
+  }, [openCardId, dialogHeadingId]);
 
   /** Lets the page scroll again, back where it was when the dialog opened. */
   function releaseScroll() {

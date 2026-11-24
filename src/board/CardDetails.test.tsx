@@ -375,3 +375,36 @@ describe('the rendered file while the card is rendered again', () => {
     expect(fileRow()).toHaveTextContent('Not made yet');
   });
 });
+
+describe('the post text boxes', () => {
+  it('follow the checks on a card without the editor', () => {
+    openWith(PASS);
+    const checks = screen.getByRole('region', { name: 'Checks' });
+    const text = screen.getByRole('region', { name: 'Post text' });
+    expect(checks.compareDocumentPosition(text) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(text).getByLabelText('Caption')).toHaveValue('Topping out this week.');
+    expect(within(text).getByLabelText('Hashtags')).toHaveValue('#construction #toppingout');
+    expect(within(text).getByLabelText('First comment')).toHaveValue('More on our site.');
+  });
+
+  it('are shown on a card with the editor too, after its file settings and before the override', () => {
+    render(
+      <CardDetails
+        card={makeCard({ assetIds: [PHOTO.id], validation: FAIL })}
+        name="Instagram Feed vertical"
+        fileName="site.jpg"
+        render={undefined}
+        version={{ version: 1, copyIndex: 1, copyCount: 1, isCopy: false, parentVersion: null }}
+        headingId="details"
+        editor={<div>The editor</div>}
+      />,
+    );
+    const text = screen.getByRole('region', { name: 'Post text' });
+    const fileType = screen.getByRole('group', { name: 'File type' });
+    const override = screen.getByRole('region', { name: 'Export override' });
+    const follows = (a: Node, b: Node) =>
+      a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING;
+    expect(follows(fileType, text)).toBeTruthy();
+    expect(follows(text, override)).toBeTruthy();
+  });
+});

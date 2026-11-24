@@ -302,7 +302,7 @@ Card details shows a Background colour control for every card the editor can ope
 - Text box: takes six hex digits, with or without `#`, in any case. The colour is applied on Enter or when the box loses focus, as one undo step if it changed. Anything else shows a plain-language message, is not applied, and the box goes back to the card's colour when it loses focus.
 - Both go through the card dialog's shared undo. Ctrl/Cmd-Z on the colour picker undoes the last change in the dialog, as on a checkbox, a radio button or a slider; in the text box it undoes typing.
 
-The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, export override, Close. Arrow keys on the crop never change any other control.
+The Tab order in the card dialog is: crop area, focal point, Reset crop, Fit whole photo, colour picker, hex text box, file type, quality, caption, hashtags, first comment, export override, Close. Arrow keys on the crop never change any other control.
 
 Rendering:
 
@@ -350,6 +350,13 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - Today a card's `copy` has one optional `authoredBy`, beside `caption`, `firstComment`, `hashtags` and `altText`, so it stands for all four at once. Nothing in the app sets it yet.
 - From Phase 2, `authoredBy` covers the caption, the hashtags and the first comment, which the caption task writes together.
 - Alt text gets its own optional provenance field, separate from `authoredBy`. Its name is settled in the task that builds AI alt text.
+- When a person's edit changes the caption, the hashtags or the first comment (compared when they leave the box), `authoredBy` is removed. If nothing changed, it stays.
+
+### Caption boxes
+
+- Every card shows the caption, hashtags and first comment boxes, including the Instagram "Reel / Story" placement. Reels use captions.
+- On any placement that can be a Story (`canBeStory` is true in `platforms.json`), a short plain note under the boxes says: "Reels show this caption. Stories don't show captions, hashtags or a first comment." The note is neutral text, not a warning. It does not change any validation result.
+- Because Reels post the caption, the Instagram "Reel / Story" placement (key `story`) uses the Instagram feed caption and hashtag limits (`captionCap`, `hashtagCap`, `hashtagsInCaption`), so rules 4 and 5 apply to it.
 
 ### Photos
 
@@ -417,7 +424,7 @@ Phase 2 questions this spec does not yet answer:
 - [ ] AI usage counter: where is it stored, and what does it count?
 - [ ] Cover slide: what does choosing a carousel's cover slide (`coverIndex`) change?
 - [ ] LinkedIn document carousel: alt text is per slide, but the PDF is one file with one row in `captions.csv`. Where does each slide's alt text go?
-- [ ] Placements with no caption (the Story placements): are the caption, hashtags and first comment boxes shown for them?
+- [x] Placements with no caption (the Story placements): are the caption, hashtags and first comment boxes shown for them? Decided: yes, see "Caption boxes".
 - [ ] Voice document: is the 500-word limit enforced, or only advised?
 - [ ] Overlay presets: which settings does a preset hold?
 - [ ] Carousel focal point: a card's own focal point is a single point, but a carousel has several photos. How do the two fit together?

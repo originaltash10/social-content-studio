@@ -7,6 +7,9 @@
  * export unless overridden"). It stays visible while the override is ticked, so it can always be
  * unticked, even after the card stops failing.
  *
+ * Every card shows its caption, hashtags and first comment boxes (CopyFields.tsx), after its
+ * file settings and before the export override.
+ *
  * A card the editor can open also shows its background colour, then its file type (JPG or PNG)
  * and JPG quality. A card without the editor (its photo is not in the session, or it is not a
  * single-photo card) cannot be made into a file, so it has no file settings to change either.
@@ -30,7 +33,9 @@ import { useSessionStore } from '../store/sessionStore';
 import type { Card } from '../types';
 import { focusClass, resultTextClass } from '../app/styles';
 import { backgroundOf } from '../lib/render/background';
+import { getPlacement } from '../lib/platforms';
 import { BackgroundControls } from './BackgroundControls';
+import { CopyFields } from './CopyFields';
 import type { DialogUndo } from './dialogUndo';
 import { FileTypeControls } from './FileTypeControls';
 import { UPDATING_TEXT, useLastDone } from './lastDone';
@@ -155,6 +160,13 @@ export function CardDetails({
               <FileTypeControls cardId={card.id} edit={card.edit} record={record} undo={undo} />
             </>
           )}
+
+          <CopyFields
+            key={card.id}
+            card={card}
+            spec={getPlacement(card.platform, card.placement)}
+            record={record}
+          />
 
           {(card.validation.level === 'fail' || card.overrideFail) && (
             <section aria-label="Export override" className="flex flex-col gap-1">

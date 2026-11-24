@@ -677,6 +677,28 @@ describe('the details dialog', () => {
     return { opener, dialog: dialog as HTMLDialogElement };
   }
 
+  it('updates the badge and the tile reason once caption text is written on leaving its box', async () => {
+    const { dialog } = await openDetails();
+    const label = 'Instagram Feed vertical for site.jpg, v1';
+    const cap = FEED.captionCap as number;
+    const box = within(dialog).getByLabelText('Caption');
+    fireEvent.focus(box);
+    fireEvent.change(box, { target: { value: 'a'.repeat(cap + 1) } });
+    // While typing, the box says so, but nothing is written and the card's result is unchanged.
+    expect(within(dialog).getByText(/^Caption is \d/)).toBeInTheDocument();
+    expect(store().session?.cards[0]?.copy.caption).toBe('');
+    expect(within(article(label)).queryByText(/^Caption is/)).toBeNull();
+    expect(within(article(label)).getByText('Warning')).toBeInTheDocument();
+
+    fireEvent.blur(box);
+    await idle();
+    expect(store().session?.cards[0]?.copy.caption).toBe('a'.repeat(cap + 1));
+    expect(within(article(label)).getByText('Fail')).toBeInTheDocument();
+    expect(within(article(label)).getByText(/^Caption is \d/)).toHaveClass('text-danger-text');
+    const checks = within(dialog).getByRole('region', { name: 'Checks' });
+    expect(within(checks).getAllByRole('listitem')[0]).toHaveTextContent(/^Fail: Caption is /);
+  });
+
   it('opens as a modal with the file, the version and every check', async () => {
     const { dialog } = await openDetails();
     expect(dialog.open).toBe(true);
@@ -1311,12 +1333,13 @@ describe('undo in the dialog', () => {
     const { dialog, stop } = await openFailing();
     /** What Tab reaches, in order: everything focusable that is not disabled. */
     const order = () =>
-      [...dialog.querySelectorAll<HTMLElement>('button, input, [tabindex="0"]')]
+      [...dialog.querySelectorAll<HTMLElement>('button, input, textarea, [tabindex="0"]')]
         .filter((element) => !(element as HTMLButtonElement).disabled)
         .map(
           (element) =>
             element.getAttribute('data-testid') ??
             element.getAttribute('aria-label')?.split('.')[0] ??
+            (element instanceof HTMLTextAreaElement ? element.labels[0]?.textContent : null) ??
             (element.closest('label')?.textContent || element.textContent),
         );
     const rest = [
@@ -1326,6 +1349,9 @@ describe('undo in the dialog', () => {
       'JPG',
       'PNG',
       'Quality',
+      'Caption',
+      'Hashtags',
+      'First comment',
       'Export this card even though it fails its checks',
       'Close',
     ];
@@ -1563,5 +1589,196 @@ describe('telling the export panel when the board is busy', () => {
     fireEvent.click(button('Cancel all'));
     await idle();
     expect(onBusyChange).toHaveBeenLastCalledWith(false);
+  });
+});
+
+describe('undo of the post text boxes in the dialog', () => {
+  /** Sends Ctrl/Cmd-Z to `target` and returns the event. */
+  function undoKey(target: Element) {
+    const event = new KeyboardEvent('keydown', {
+      key: 'z',
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    act(() => {
+      target.dispatchEvent(event);
+    });
+    return event;
+  }
+
+  const steps = () => store().undoStack.length;
+  const stored = () => store().session?.cards[0];
+
+  /** Opens a card's dialog with its editor, with the app-wide undo also listening. */
+  async function open() {
+    openSession(PHOTO);
+    render(
+      <>
+        <SessionPanel />
+        <Board createClient={createClient} onController={onController} loadPhoto={loadPhoto} />
+      </>,
+    );
+    createCards('Feed vertical');
+    await sent(1);
+    answer(0);
+    await idle();
+    const opener = button('Open Instagram Feed vertical for site.jpg, v1');
+    fireEvent.click(opener);
+    const dialog = screen.getByRole('dialog') as HTMLDialogElement;
+    await showPhoto();
+    const heading = within(dialog).getByRole('heading', { level: 2 });
+    const box = (label: string) => within(dialog).getByLabelText(label) as HTMLTextAreaElement;
+    /** One visit to a box: focus it, type the whole text, and leave for the heading. */
+    function visit(label: string, text: string) {
+      act(() => box(label).focus());
+      fireEvent.change(box(label), { target: { value: text } });
+      act(() => heading.focus());
+    }
+    return { dialog, opener, heading, box, visit };
+  }
+
+  it('leaves Ctrl/Cmd-Z inside a box to the browser: no app or dialog undo', async () => {
+    const { box, visit } = await open();
+    visit('Caption', 'One');
+    const before = steps();
+    act(() => box('Caption').focus());
+    fireEvent.change(box('Caption'), { target: { value: 'One two' } });
+    const event = undoKey(box('Caption'));
+    // Not prevented, so the browser undoes the typing; the card and the undo list are untouched.
+    expect(event.defaultPrevented).toBe(false);
+    expect(steps()).toBe(before);
+    expect(stored()?.copy.caption).toBe('One');
+    expect(box('Caption').value).toBe('One two');
+  });
+
+  it('restores the whole previous text in one step with Ctrl/Cmd-Z after leaving the box', async () => {
+    const { heading, box } = await open();
+    const before = steps();
+    act(() => box('Caption').focus());
+    for (const text of ['H', 'He', 'Hello', 'Hello world']) {
+      fireEvent.change(box('Caption'), { target: { value: text } });
+    }
+    act(() => heading.focus());
+    expect(steps()).toBe(before + 1);
+    expect(undoKey(heading).defaultPrevented).toBe(true);
+    expect(steps()).toBe(before);
+    expect(stored()?.copy.caption).toBe('');
+    expect(box('Caption').value).toBe('');
+  });
+
+  it('makes two visits to the caption two steps, each undone by its own Ctrl/Cmd-Z', async () => {
+    const { heading, box, visit } = await open();
+    const before = steps();
+    visit('Caption', 'First visit');
+    visit('Caption', 'First visit, then the second');
+    expect(steps()).toBe(before + 2);
+    undoKey(heading);
+    expect(stored()?.copy.caption).toBe('First visit');
+    expect(box('Caption').value).toBe('First visit');
+    undoKey(heading);
+    expect(stored()?.copy.caption).toBe('');
+    expect(steps()).toBe(before);
+  });
+
+  it('makes a caption visit and a hashtags visit two steps, undone one at a time', async () => {
+    const { heading, box, visit } = await open();
+    const before = steps();
+    visit('Caption', 'Topping out');
+    visit('Hashtags', '#build #site');
+    expect(steps()).toBe(before + 2);
+    undoKey(heading);
+    expect(stored()?.copy).toMatchObject({ caption: 'Topping out', hashtags: [] });
+    expect(box('Hashtags').value).toBe('');
+    undoKey(heading);
+    expect(stored()?.copy).toMatchObject({ caption: '', hashtags: [] });
+  });
+
+  it.each(['quality first', 'caption first'] as const)(
+    'keeps a quality change and a caption visit as separate steps (%s)',
+    async (order) => {
+      const { dialog, heading, visit } = await open();
+      const before = steps();
+      const slider = within(dialog).getByRole('slider', { name: 'Quality' });
+      const quality = () => {
+        fireEvent.keyDown(slider, { key: 'PageDown' });
+        fireEvent.keyUp(slider, { key: 'PageDown' });
+      };
+      const edit = () => stored()?.edit as ImageEdit;
+      if (order === 'quality first') {
+        quality();
+        visit('Caption', 'After the quality');
+      } else {
+        visit('Caption', 'Before the quality');
+        quality();
+      }
+      expect(steps()).toBe(before + 2);
+      expect(edit().quality).toBe(0.8);
+      // Each Ctrl/Cmd-Z undoes exactly one of them, newest first.
+      undoKey(heading);
+      if (order === 'quality first') {
+        expect(stored()?.copy.caption).toBe('');
+        expect(edit().quality).toBe(0.8);
+      } else {
+        expect(stored()?.copy.caption).toBe('Before the quality');
+        expect(edit().quality).toBe(0.9);
+      }
+      undoKey(heading);
+      expect(stored()?.copy.caption).toBe('');
+      expect(edit().quality).toBe(0.9);
+      expect(steps()).toBe(before);
+    },
+  );
+
+  it('writes a focused box once when Esc closes the dialog, and keeps the text', async () => {
+    const { dialog, box } = await open();
+    const before = steps();
+    act(() => box('First comment').focus());
+    fireEvent.change(box('First comment'), { target: { value: 'Typed, then Esc' } });
+    pressEscape(dialog);
+    expect(dialog.open).toBe(false);
+    expect(steps()).toBe(before + 1);
+    expect(stored()?.copy.firstComment).toBe('Typed, then Esc');
+    fireEvent.click(button('Open Instagram Feed vertical for site.jpg, v1'));
+    expect(within(screen.getByRole('dialog')).getByLabelText('First comment')).toHaveValue(
+      'Typed, then Esc',
+    );
+    expect(steps()).toBe(before + 1);
+  });
+
+  it('stays closed when a box writes its text between Esc and the close event, as in Chrome', async () => {
+    const { dialog, opener, box } = await open();
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal');
+    try {
+      act(() => box('Caption').focus());
+      fireEvent.change(box('Caption'), { target: { value: 'Typed, then Esc' } });
+      // Chrome's order: close() ends the open state and moves focus back to the Open button
+      // (so the box writes its text) before the close event is fired.
+      act(() => {
+        dialog.removeAttribute('open');
+        opener.focus();
+      });
+      expect(stored()?.copy.caption).toBe('Typed, then Esc');
+      act(() => {
+        dialog.dispatchEvent(new Event('close'));
+      });
+      expect(showModal).not.toHaveBeenCalled();
+      expect(dialog.open).toBe(false);
+      expect(opener).toHaveFocus();
+      expect(screen.queryByRole('dialog')).toBeNull();
+    } finally {
+      showModal.mockRestore();
+    }
+  });
+
+  it('writes a focused box once when the Close button closes the dialog', async () => {
+    const { dialog, box } = await open();
+    const before = steps();
+    act(() => box('Hashtags').focus());
+    fireEvent.change(box('Hashtags'), { target: { value: '#one, #two' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(dialog.open).toBe(false);
+    expect(steps()).toBe(before + 1);
+    expect(stored()?.copy.hashtags).toEqual(['#one', '#two']);
   });
 });
