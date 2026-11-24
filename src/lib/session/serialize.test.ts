@@ -20,7 +20,7 @@ import {
   makeSession,
   withInjectedKeys,
 } from '../../test/fixtures';
-import type { BrandKit, Card, ImageEdit, Session } from '../../types';
+import type { BrandKit, Brief, Card, ImageEdit, Session } from '../../types';
 
 /** The i-th entry of a raw JSON list, as an object. */
 function item(list: unknown, i: number): Record<string, unknown> {
@@ -392,6 +392,136 @@ describe('session.json', () => {
     const nan = { ...makeSession(), assets: [makeAsset({ width: Number.NaN })] };
     expect(() => serializeSession(nan)).toThrow('session.assets[0].width must be a finite number');
   });
+});
+
+describe('the campaign brief in session.json', () => {
+  const WITH_LINK: Brief = {
+    topic: 'Topic marker one',
+    audience: 'Audience marker two',
+    cta: 'Call to action marker three.',
+    link: 'https://example.com/marker-four',
+    tone: 'casual',
+  };
+  const NO_LINK: Brief = {
+    topic: 'Topic marker one',
+    audience: 'Audience marker two',
+    cta: 'Call to action marker three.',
+    tone: 'formal',
+  };
+  /** The brief as it is in the file's raw JSON. */
+  const rawBrief = (text: string) => (JSON.parse(text) as { brief: Record<string, unknown> }).brief;
+
+  it('round-trips a brief with a link, field for field', () => {
+    const text = serializeSession(makeSession({ brief: WITH_LINK }));
+    expect(rawBrief(text)).toEqual(WITH_LINK);
+    expect(Object.keys(rawBrief(text))).toEqual(['topic', 'audience', 'cta', 'link', 'tone']);
+    const loaded = parseSession(text);
+    expect(loaded.brief).toEqual(WITH_LINK);
+    expect(loaded.brief).not.toBe(WITH_LINK);
+    expect(serializeSession(loaded)).toBe(text);
+  });
+
+  it('round-trips a brief without a link, and writes no link for it', () => {
+    const text = serializeSession(makeSession({ brief: NO_LINK }));
+    expect(rawBrief(text)).toEqual(NO_LINK);
+    expect(Object.hasOwn(rawBrief(text), 'link')).toBe(false);
+    const loaded = parseSession(text);
+    expect(loaded.brief).toEqual(NO_LINK);
+    expect(Object.hasOwn(loaded.brief, 'link')).toBe(false);
+    expect(serializeSession(loaded)).toBe(text);
+  });
+
+  it.each(['formal', 'neutral', 'casual'] as const)('round-trips the tone "%s"', (tone) => {
+    const session = makeSession({ brief: { ...NO_LINK, tone } });
+    expect(parseSession(serializeSession(session)).brief.tone).toBe(tone);
+  });
+
+  it('keeps the text exactly as it is: spaces, line breaks, accents and emoji', () => {
+    const typed: Brief = {
+      topic: '  Two lines \n\n second line  ',
+      audience: '\tCaf\u{E9} owners, na\u{EF}ve users \u{1F44B}\u{1F3FD} ',
+      cta: ' See the "project" page.  ',
+      link: '  example.com/a page?x=1 ',
+      tone: 'neutral',
+    };
+    const loaded = parseSession(serializeSession(makeSession({ brief: typed })));
+    expect(loaded.brief).toEqual(typed);
+    expect(loaded.brief.cta).toBe(' See the "project" page.  ');
+  });
+
+  it('loads a file with an empty brief unchanged', () => {
+    // The brief of every session made before the brief could be edited: empty, neutral, no link.
+    const empty: Brief = { topic: '', audience: '', cta: '', tone: 'neutral' };
+    const session = makeSession({ brief: empty });
+    const older = JSON.stringify(session);
+    const loaded = parseSession(older);
+    expect(loaded).toEqual(session);
+    expect(loaded.brief).toEqual(empty);
+    expect(Object.hasOwn(loaded.brief, 'link')).toBe(false);
+    // Saving it again writes the same file the serializer always wrote for it, at version 1.
+    expect(serializeSession(loaded)).toBe(serializeSession(session));
+    expect(loaded.version).toBe(1);
+  });
+
+  it('rejects a file with no brief', () => {
+    const text = tamper(serializeSession(makeSession()), (raw) => {
+      delete raw.brief;
+    });
+    expect(() => parseSession(text)).toThrow(SessionFormatError);
+    expect(() => parseSession(text)).toThrow('session.brief must be an object');
+  });
+
+  it('rejects a brief that is null', () => {
+    const text = tamper(serializeSession(makeSession()), (raw) => {
+      raw.brief = null;
+    });
+    expect(() => parseSession(text)).toThrow('session.brief must be an object');
+  });
+
+  it.each<[string, (brief: Record<string, unknown>) => void, string]>([
+    ['no topic', (b) => delete b.topic, 'session.brief.topic must be a string'],
+    ['no audience', (b) => delete b.audience, 'session.brief.audience must be a string'],
+    ['no call to action', (b) => delete b.cta, 'session.brief.cta must be a string'],
+    [
+      'no tone',
+      (b) => delete b.tone,
+      'session.brief.tone must be one of "formal", "neutral", "casual"',
+    ],
+    ['a link that is not text', (b) => (b.link = 7), 'session.brief.link must be a string'],
+  ])('rejects a brief with %s', (_name, change, message) => {
+    const text = tamper(serializeSession(makeSession()), (raw) => {
+      change(raw.brief as Record<string, unknown>);
+    });
+    expect(() => parseSession(text)).toThrow(message);
+  });
+
+  it('drops an unknown field inside the brief, on load and on save', () => {
+    const text = tamper(serializeSession(makeSession({ brief: WITH_LINK })), (raw) => {
+      const brief = raw.brief as Record<string, unknown>;
+      brief.somethingNew = 'not part of the data model';
+      brief.notes = { nested: true };
+    });
+    expect(text).toContain('somethingNew');
+    const loaded = parseSession(text);
+    expect(loaded.brief).toEqual(WITH_LINK);
+    expect(Object.keys(loaded.brief)).toEqual(['topic', 'audience', 'cta', 'link', 'tone']);
+    const stray = { ...makeSession(), brief: { ...WITH_LINK, somethingNew: 'x' } };
+    const saved = serializeSession(stray);
+    expect(saved).not.toContain('somethingNew');
+    expect(rawBrief(saved)).toEqual(WITH_LINK);
+  });
+
+  it.each([
+    ['empty', ''],
+    ['only spaces', '  '],
+  ])(
+    'keeps a link that is %s as it is in the file: the store leaves it out, not the serializer',
+    (_name, link) => {
+      const text = serializeSession(makeSession({ brief: { ...NO_LINK, link } }));
+      expect(rawBrief(text).link).toBe(link);
+      expect(parseSession(text).brief.link).toBe(link);
+    },
+  );
 });
 
 describe('brand.json', () => {
