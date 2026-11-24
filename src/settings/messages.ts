@@ -41,6 +41,8 @@ export const ACTION_MESSAGES = {
   replaced: 'Key saved. It replaces the key saved before.',
   saveFailed:
     "This browser couldn't save the key. Check that this site may store data, then try again.",
+  chooseFailed:
+    "This browser couldn't save your choice. Check that this site may store data, then try again.",
   checking: 'Checking the connection…',
   removed: 'Key removed from this browser.',
   nothingToRemove: 'No key saved, so there was nothing to remove.',
