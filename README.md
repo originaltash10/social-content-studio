@@ -20,6 +20,10 @@ the images as files. The app as a whole is not finished. What works today:
   saved with the session, unchanged. A photo that is already in the session is not added twice.
   Files are recognised by their contents, not their names. Video (MP4, MOV) is not imported yet,
   and other file types need converting to JPG or PNG first; the panel says so for each file.
+- **Campaign brief.** With a session open, fill in the Campaign brief panel under the import
+  panel: topic, audience, call to action, link and tone. All of it is optional. It is saved with
+  the session and is never exported; nothing uses it yet, but the planned AI writing features
+  will.
 - **The board.** Choose Create cards, pick photos and Instagram or LinkedIn placements (for
   example Instagram Feed vertical or LinkedIn Image post square), and the board makes one card
   for each. Each card's image is cropped around a point on the photo that you can move, and
