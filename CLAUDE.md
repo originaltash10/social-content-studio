@@ -12,8 +12,13 @@ Keep each task to one feature row from the SPEC feature table.
   JSON. Marketing must be able to update the file without a code change. Every entry has a
   `verified` date; update it when a value is re-checked.
 - No backend. Everything runs in the browser; only AI provider calls leave the machine.
-- API keys are stored only in IndexedDB. They are never written into a session file, never logged,
-  and sent only to that provider's API endpoint.
+- API keys are stored only in IndexedDB, in their own store (`social-content-studio-settings`,
+  separate from the folder handle; see `src/settings/keyStore.ts`). They are never put in the
+  session store, undo, a session file, an export, localStorage or the URL, never logged, never
+  shown again after saving, and sent only to that provider's API endpoint, in a request header.
+- Messages about a provider call are fixed text written by the app. Never show or pass on the
+  provider's error text, a response body or a raw error's message (do not use `errorMessage()`
+  from `src/lib/session/errors.ts` on provider or fetch errors).
 - Asset files are immutable once imported: a photo's file and its pixels never change. Two things
   can be set afterwards: the focal point, and a cached AI description of the photo. Every other
   change happens on a card.
@@ -94,4 +99,12 @@ node e2e/image-worker.check.mjs   # image worker and HEIC import
 node e2e/board.check.mjs          # board: cards, previews, checks, .scs round trip
 node e2e/editor.check.mjs         # editor: crop, focal point, undo
 node e2e/export.check.mjs         # export: zip and folder, clean files, captions.csv, reload
+node e2e/settings.check.mjs       # settings: AI key, Test connection against a fake provider
 ```
+
+`e2e/settings.check.mjs` never contacts a real provider: a fake one answers through
+`context.route`, and Chromium is started with a host-resolver rule that sends the provider's
+address to a local port that closes every connection. Playwright answers CORS preflights for
+routed requests itself, so this check cannot test the real API's CORS rules (for example,
+whether it accepts the `x-api-key` header from a web page). Only a manual test with a real key
+on the live site can; a real key never goes in a file, a command or a test.

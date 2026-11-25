@@ -80,9 +80,21 @@ alt text, text and logos on the image, carousels, and video.
 The app runs entirely in your browser. There is no server, and your media files stay on your
 computer.
 
-Planned AI writing features (captions and alt text) will be optional. They will use your own
-API key and send content only to the AI provider you choose, and the app will say clearly what
-it sends. None of this is built yet.
+AI writing help (captions and alt text, still to come) is optional and uses your own API key.
+Settings, the first button on the page, is where you choose the provider (Claude, from
+Anthropic, for now) and save your key.
+
+- Your key is kept in this browser on this computer only. It is never saved in a session, a
+  `.scs` file or an export, and the app does not show it again after you save it.
+- The key is sent only to the provider's own address (`api.anthropic.com`), and only when you
+  ask: Test connection sends your key to check it, and no photos or text. Before any AI request
+  that sends content, the app will show exactly what it sends.
+- Remove key deletes the key from this browser at once. On a shared computer, remove it when you
+  are done.
+- Create a key with an expiry date and set a spending limit, both in your provider account.
+- A browser keeps saved data per web address. If the app is published on GitHub Pages, it should
+  be the only site published under the same `github.io` address, so no other site there can read
+  the key.
 
 ## Saving your work
 
@@ -101,8 +113,10 @@ npm run build   # build the app into dist/
 ```
 
 To check the board in a real Chrome browser, run `node e2e/board.check.mjs`; to check the
-editor, run `node e2e/editor.check.mjs`; and to check export, run `node e2e/export.check.mjs`
-(each needs Playwright with Chromium installed, and prints a pass or fail line for each check).
+editor, run `node e2e/editor.check.mjs`; to check export, run `node e2e/export.check.mjs`; and
+to check Settings, run `node e2e/settings.check.mjs`, which uses a fake provider and never
+contacts a real one (each needs Playwright with Chromium installed, and prints a pass or fail
+line for each check).
 
 ## License
 

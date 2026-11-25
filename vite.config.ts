@@ -16,7 +16,7 @@ export default defineConfig({
     setupFiles: ['./src/test/setup.ts'],
     coverage: {
       provider: 'v8',
-      include: ['src/lib/**/*.ts', 'src/store/**/*.ts'],
+      include: ['src/lib/**/*.ts', 'src/store/**/*.ts', 'src/ai/**/*.ts', 'src/settings/**/*.ts'],
       // src/workers/image.worker.ts is the only source file left out of coverage: it is a few
       // lines of wiring that can only run inside a real worker. Its logic is in src/lib/render.
       exclude: ['src/**/*.test.ts', 'src/workers/image.worker.ts'],
@@ -38,6 +38,10 @@ export default defineConfig({
         // Export: file names, metadata stripping, captions.csv and the export run itself.
         'src/lib/export/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
         'src/store/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        // AI settings: the key store, the provider list and messages, and the provider adapters.
+        // Held to the same bar, but not protected paths.
+        'src/ai/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
+        'src/settings/**': { statements: 100, branches: 100, functions: 100, lines: 100 },
       },
     },
   },

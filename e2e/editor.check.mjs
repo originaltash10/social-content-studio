@@ -823,7 +823,8 @@ async function runEditor(browser, scrollbarBrowser, name, url) {
     await stage.waitFor({ timeout: 60_000 });
     const inside = () =>
       page.evaluate(() => {
-        const element = document.querySelector('dialog');
+        // The open one: the page also has the Settings dialog, closed, earlier in the page.
+        const element = document.querySelector('dialog[open]');
         return { top: element.scrollTop, room: element.scrollHeight - element.clientHeight };
       });
     const insideBefore = await inside();
