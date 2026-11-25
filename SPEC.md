@@ -1,6 +1,6 @@
 # Social Content Studio — Product Spec
 
-As of November 23, 2026
+As of November 24, 2026
 
 ## Purpose
 
@@ -146,7 +146,10 @@ Tasks built on that interface, each a function in `src/ai/tasks/`:
 | repurpose | pasted text or URL content | post set per platform | P2 |
 | transcribe | audio track | timed captions | P2; Whisper via transformers.js when no provider supports audio |
 
-Key handling: the user pastes a key in Settings. It is stored in the browser's IndexedDB for this app only, never written into a session file, an export or a log, and sent only to that provider's API endpoint. Settings shows a "Test connection" button, a visible "Remove key" button and a per-provider usage counter. There is no default provider; the user chooses one in Settings. Whether each provider allows calls straight from a web page with the user's own key is confirmed before its adapter is built. When this spec was first written, the understanding was that browser calls to the Anthropic API need the `anthropic-dangerous-direct-browser-access` header and that Gemini and OpenAI accept browser calls with a key directly; both are to be confirmed.
+Key handling: the user pastes a key in Settings. It is stored in the browser's IndexedDB for this app only, never written into a session file, an export or a log, and sent only to that provider's API endpoint. Settings shows a "Test connection" button, a visible "Remove key" button and a per-provider usage counter. There is no default provider; the user chooses one in Settings. Whether each provider allows calls straight from a web page with the user's own key is confirmed before its adapter is built.
+
+- Anthropic: confirmed on November 24, 2026 from Anthropic's authentication page (https://platform.claude.com/docs/en/manage-claude/authentication, "Browser-based applications"). A call from a web page must send the `anthropic-dangerous-direct-browser-access: true` header. The app sends the key in the `x-api-key` header, which Anthropic documents as a legacy header that is still accepted alongside `Authorization: Bearer`; it was chosen because it is the long-established form for calls from a web page. An organization with zero data retention or the Compliance API turned on cannot call the API from a web page at all: the API answers 401 even though the key is valid, and the app says so in its own words. A key that is not tied to one workspace needs a workspace ID on every request; the app does not ask for one, and tells the user to create a key inside a workspace.
+- Gemini and OpenAI: the understanding when this spec was first written was that they accept browser calls with a key directly. To be confirmed in task 6.
 
 Every generated text records `{provider, model, timestamp}` so the card can show who wrote it. A "Regenerate" button re-runs the same task; "Edit" opens the text for manual change and clears the provider badge.
 
@@ -372,7 +375,7 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - A session has one campaign brief (`Session.brief`): topic, audience, call to action, link and tone. It is per session, not per card and not per platform. Every field is optional.
 - It is edited in a "Campaign brief" section on the page, between the Import panel and the Board, shown only while a session is open. Under the heading, one short hint says: "Optional. Saved with the session; not exported."
 - Controls, in order: "Topic" and "Audience" are multi-line text boxes. "Call to action" and "Link" are single-line text boxes. Tone is a group of three radio buttons, "Formal", "Neutral" and "Casual", under the legend "Tone". A new session's brief is empty, with Neutral chosen. The Link box is an ordinary text box with spell-checking off; the browser does not check it as a web address.
-- The page's Tab order is: session controls, Import ("Choose files"), Topic, Audience, Call to action, Link, Tone, Board, Export. The card dialog's Tab order is unchanged.
+- The page's Tab order is: Settings, session controls, Import ("Choose files"), Topic, Audience, Call to action, Link, Tone, Board, Export. The card dialog's Tab order is unchanged.
 - There are no counts and no limits: no length limit on any field, and no check on the link's format. The tone is one of `formal`, `neutral` and `casual`.
 - Text is stored exactly as typed, with nothing trimmed, so the call to action is kept word for word. The one exception is an empty link: a Link box that is empty or holds only spaces removes `link` from the brief, so none is written to `session.json`.
 - The four text boxes are written the same way as the caption boxes. Typing changes only the box. The text is written when the person leaves the box, as one change per visit, and not at all if it did not change. A box still being typed in is also written when the page is hidden (another tab, or the tab or window closing). The tone is written as soon as it is chosen.
@@ -397,6 +400,11 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 - The image sent for alt text is a reduced copy of the card's finished picture with metadata removed, never the original file.
 - There is no default provider. The user chooses one in Settings.
 - Keys are kept in this browser on this computer only, never in session files, exports or logs. Settings has a visible "Remove key" button.
+- Settings is a dialog opened by a "Settings" button, the first control on the page, with or without a session open. It holds the provider choice (Claude (Anthropic) for now; nothing is chosen until the user chooses), the key box, Save key, Test connection, Remove key and Close. Its buttons are never disabled; they answer with a message instead.
+- A saved key is never shown again, masked or otherwise. Text typed in the key box and not saved is discarded when Settings closes. Remove key deletes the key at once, with no confirmation. New session and Clear never touch keys.
+- Test connection asks the provider for its list of models with the saved key. It sends no photos or text, so it does not go through the "what is sent" panel, and it does not count toward any usage counter.
+- Closing Settings while Test connection is running cancels it, and its result is never shown. Escape pressed inside Settings closes only Settings, and Ctrl/Cmd-Z inside it never undoes a change to the session (in the key box it is still the browser's typing undo). Enter in the key box saves the key.
+- Messages about a provider call are written by the app. The provider's own error text and response body are never shown.
 - Before any adapter is built, confirm that each provider allows calls straight from a web page with the user's own key.
 
 ### Carousels
@@ -444,7 +452,8 @@ Decided before Phase 2 began. Where an earlier part of this spec said something 
 Phase 2 questions this spec does not yet answer:
 
 - [ ] Tone: the session has one tone (`Brief.tone`), built with the campaign brief panel (task 4). Still open: does task 8 add a per-platform override ("Formal for LinkedIn, lighter for Instagram")?
-- [ ] AI usage counter: where is it stored, and what does it count?
+- [ ] AI usage counter: where is it stored, and what does it count? Planned: settings storage, never in a session; decided in task 7.
+- [ ] Content Security Policy: a small task before task 7 adds a policy (a meta tag, since GitHub Pages cannot set headers) that lets the page contact only its own address and the chosen providers' API addresses.
 - [ ] Cover slide: what does choosing a carousel's cover slide (`coverIndex`) change?
 - [ ] LinkedIn document carousel: alt text is per slide, but the PDF is one file with one row in `captions.csv`. Where does each slide's alt text go?
 - [x] Placements with no caption (the Story placements): are the caption, hashtags and first comment boxes shown for them? Decided: yes, see "Caption boxes".
